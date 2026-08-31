@@ -9,6 +9,12 @@ import android.graphics.Shader;
 
 /** Shared, stateless spectrum painter used by every lyric surface. */
 final class SpectrumRenderer {
+    private static final int[] RAINBOW_COLORS =
+            {0xFFFF5E7D, 0xFFFFC857, 0xFF55EFC4, 0xFF54A0FF, 0xFFB76DFF};
+    /** Canvas drawing happens on a UI thread; keep its temporary geometry off the GC path. */
+    private static final ThreadLocal<DrawScratch> SCRATCH = new ThreadLocal<DrawScratch>() {
+        @Override protected DrawScratch initialValue() { return new DrawScratch(); }
+    };
     private SpectrumRenderer() { }
 
     static void draw(Canvas canvas, Paint paint, RectF bounds, float[] levels, String style,
@@ -22,8 +28,10 @@ final class SpectrumRenderer {
         int count = levels.length;
         float slot = bounds.width() / count;
         float itemWidth = Math.max(1f, slot * ("dots".equals(style) ? 0.34f : 0.58f));
-        Path wave = "wave".equals(style) ? new Path() : null;
-        RectF item = new RectF();
+        DrawScratch scratch = SCRATCH.get();
+        Path wave = "wave".equals(style) ? scratch.wave : null;
+        if (wave != null) wave.reset();
+        RectF item = scratch.item;
         for (int i = 0; i < count; i++) {
             float level = clamp(levels[i]);
             int color = colorAt(i, count, colorMode, baseColor, customColor, artworkPalette);
@@ -53,7 +61,7 @@ final class SpectrumRenderer {
             paint.setStrokeWidth(Math.max(2f, bounds.height() * 0.055f));
             if ("rainbow".equals(colorMode)) {
                 paint.setShader(new LinearGradient(bounds.left, 0f, bounds.right, 0f,
-                        rainbowColors(), null, Shader.TileMode.CLAMP));
+                        RAINBOW_COLORS, null, Shader.TileMode.CLAMP));
             } else if ("artwork".equals(colorMode) && artworkPalette != null
                     && artworkPalette.length > 1) {
                 paint.setShader(new LinearGradient(bounds.left, 0f, bounds.right, 0f,
@@ -80,8 +88,9 @@ final class SpectrumRenderer {
         return baseColor;
     }
 
-    private static int[] rainbowColors() {
-        return new int[]{0xFFFF5E7D, 0xFFFFC857, 0xFF55EFC4, 0xFF54A0FF, 0xFFB76DFF};
+    private static final class DrawScratch {
+        final Path wave = new Path();
+        final RectF item = new RectF();
     }
 
     private static int hslColor(float hue, float saturation, float lightness) {

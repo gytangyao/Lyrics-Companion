@@ -129,24 +129,8 @@ public final class ColorSettingsActivity extends AppCompatActivity {
         addColor(parent, "非当前歌词颜色", "留在自动时沿用“歌词颜色”。",
                 AppPreferences.inactiveLyricColor(this, secondary), 0xFFB1BCCB,
                 color -> AppPreferences.setInactiveLyricColor(this, secondary, color));
-        MaterialSwitch outline = toggle("歌词文字描边", AppPreferences.lyricOutline(this, secondary));
-        outline.setOnCheckedChangeListener((button, checked) -> {
-            AppPreferences.putDisplayBoolean(this, secondary, AppPreferences.KEY_LYRIC_OUTLINE, checked);
-            changed();
-            rebuildColors();
-        });
-        parent.addView(outline);
-        if (AppPreferences.lyricOutline(this, secondary)) {
-            addColor(parent, "描边颜色", "留在自动时按歌词颜色取反差色。",
-                    AppPreferences.lyricOutlineColor(this, secondary), 0xFF000000,
-                    color -> AppPreferences.setLyricOutlineColor(this, secondary, color));
-            addPercentSeek(parent, "描边不透明度",
-                    AppPreferences.lyricOutlineAlphaPercent(this, secondary),
-                    value -> AppPreferences.setLyricOutlineAlphaPercent(this, secondary, value));
-            addPercentSeek(parent, "描边宽度（字号百分比）",
-                    AppPreferences.lyricOutlineWidthPercent(this, secondary),
-                    value -> AppPreferences.setLyricOutlineWidthPercent(this, secondary, value));
-        }
+        addOutlineControls(parent, secondary, true, "当前歌词");
+        addOutlineControls(parent, secondary, false, "非当前歌词");
         if (AppPreferences.lyricsFollowTheme(this)) {
             addColor(parent, "浅色环境歌词颜色", "用于白天或浅色环境。",
                     AppPreferences.lyricLightColor(this, secondary), 0xFF17212E,
@@ -199,6 +183,30 @@ public final class ColorSettingsActivity extends AppCompatActivity {
         addColor(parent, "深色环境歌词颜色", "自动时使用浅色歌词。",
                 AppPreferences.statusLyricDarkColor(this), 0xFFF5F8FF,
                 color -> AppPreferences.setStatusLyricDarkColor(this, color));
+    }
+
+    private void addOutlineControls(LinearLayout parent, boolean secondary, boolean current,
+                                    String label) {
+        MaterialSwitch outline = toggle(label + "描边",
+                AppPreferences.lyricOutline(this, secondary, current));
+        outline.setOnCheckedChangeListener((button, checked) -> {
+            AppPreferences.putDisplayBoolean(this, secondary, current
+                    ? AppPreferences.KEY_CURRENT_LYRIC_OUTLINE
+                    : AppPreferences.KEY_INACTIVE_LYRIC_OUTLINE, checked);
+            changed();
+            rebuildColors();
+        });
+        parent.addView(outline);
+        if (!AppPreferences.lyricOutline(this, secondary, current)) return;
+        addColor(parent, label + "描边颜色", "自动时会按该歌词颜色生成高反差描边。",
+                AppPreferences.lyricOutlineColor(this, secondary, current), 0xFF000000,
+                color -> AppPreferences.setLyricOutlineColor(this, secondary, current, color));
+        addPercentSeek(parent, label + "描边不透明度",
+                AppPreferences.lyricOutlineAlphaPercent(this, secondary, current),
+                value -> AppPreferences.setLyricOutlineAlphaPercent(this, secondary, current, value));
+        addPercentSeek(parent, label + "描边宽度（字号百分比）",
+                AppPreferences.lyricOutlineWidthPercent(this, secondary, current),
+                value -> AppPreferences.setLyricOutlineWidthPercent(this, secondary, current, value));
     }
 
     private void addMetadataColor(LinearLayout parent, boolean secondary, String title,

@@ -7,6 +7,7 @@ import android.graphics.Paint;
 import android.os.Build;
 import android.net.Uri;
 import android.provider.OpenableColumns;
+import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
@@ -122,15 +123,22 @@ final class CustomFontStore {
     /** Applies the selected typeface to ordinary Android text widgets in each settings screen. */
     static void applyToViewTree(Context context, View view) {
         Typeface typeface = load(context);
-        if (typeface == null || view == null) return;
+        if (view == null) return;
         if (view instanceof TextView) {
             TextView textView = (TextView) view;
-            Typeface existing = textView.getTypeface();
-            int style = existing == null ? Typeface.NORMAL : existing.getStyle();
-            Typeface styledTypeface = Typeface.create(typeface, style);
-            // A display font can be a valid TTF/OTF while still omitting CJK glyphs. On Android
-            // 6.0+ verify the visible text before replacing the system fallback chain.
-            if (canRender(textView.getText(), styledTypeface)) textView.setTypeface(styledTypeface);
+            int uiScale = AppPreferences.settingsUiScale(context);
+            if (uiScale != 100) {
+                textView.setTextSize(TypedValue.COMPLEX_UNIT_PX,
+                        textView.getTextSize() * uiScale / 100f);
+            }
+            if (typeface != null) {
+                Typeface existing = textView.getTypeface();
+                int style = existing == null ? Typeface.NORMAL : existing.getStyle();
+                Typeface styledTypeface = Typeface.create(typeface, style);
+                // A display font can be a valid TTF/OTF while still omitting CJK glyphs. On Android
+                // 6.0+ verify the visible text before replacing the system fallback chain.
+                if (canRender(textView.getText(), styledTypeface)) textView.setTypeface(styledTypeface);
+            }
         }
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;

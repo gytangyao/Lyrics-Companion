@@ -89,6 +89,7 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
                 AppPreferences.trailingAccent(this, secondary));
         addToggle(panel, "锁定位置但仍可交互", AppPreferences.KEY_OVERLAY_POSITION_LOCKED,
                 AppPreferences.overlayPositionLocked(this, secondary));
+        addTouchThroughToggle(panel);
         addSeek(panel, "歌词显示行数", 1, 7,
                 AppPreferences.displayInt(this, secondary, AppPreferences.KEY_STYLE_LYRIC_LINES, 3), " 行",
                 value -> AppPreferences.putDisplayInt(this, secondary,
@@ -203,6 +204,33 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
     @Override protected void onPause() {
         LyricsDisplayService.setSettingsVisible(this, false);
         super.onPause();
+    }
+
+    private void addTouchThroughToggle(LinearLayout parent) {
+        MaterialSwitch toggle = new MaterialSwitch(this);
+        toggle.setText("锁定并触摸穿透");
+        toggle.setTextColor(0xFFF1F5FA);
+        toggle.setTextSize(14f);
+        toggle.setGravity(Gravity.CENTER_VERTICAL);
+        toggle.setPadding(0, dp(10), 0, dp(2));
+        toggle.setChecked(AppPreferences.overlayTouchThrough(this, secondary));
+        toggle.setOnCheckedChangeListener((button, checked) -> {
+            AppPreferences.get(this).edit().putBoolean(secondary
+                    ? AppPreferences.KEY_SECONDARY_OVERLAY_TOUCH_THROUGH
+                    : AppPreferences.KEY_MAIN_OVERLAY_TOUCH_THROUGH, checked).apply();
+            if (checked) {
+                AppPreferences.putDisplayBoolean(this, secondary,
+                        AppPreferences.KEY_OVERLAY_POSITION_LOCKED, true);
+            }
+            // The service installs the safety unlock handle when it restores this overlay.
+            // Leaving the settings page is enough; no hidden long-press gesture is required.
+            changed();
+        });
+        parent.addView(toggle);
+        TextView note = text("开启后点击会穿透到下面的应用，歌词位置同时锁定；通过本页关闭即可恢复交互。", 12,
+                0xFF8392A8, false);
+        note.setPadding(0, 0, 0, dp(4));
+        parent.addView(note);
     }
 
     private Point targetScreenSizeDp() {

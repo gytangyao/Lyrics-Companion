@@ -76,12 +76,14 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     private BottomSpectrumView bottomSpectrumView;
     private boolean settingsVisible;
     private boolean overlaysHiddenForPlayback;
+    private boolean secondaryHiddenForPlayback;
     private boolean screenReceiverRegistered;
     private String lastNotificationSignature = "";
     private final Handler communityHandler = new Handler(Looper.getMainLooper());
     private final Handler notificationHandler = new Handler(Looper.getMainLooper());
     private final Handler recoveryHandler = new Handler(Looper.getMainLooper());
     private int secondaryRetryAttempts;
+    private int statusLyricRetryAttempts;
     private final Runnable communityHeartbeat = new Runnable() {
         @Override public void run() {
             CommunityClient.heartbeatAsync(getApplicationContext(), null);
@@ -109,9 +111,18 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         @Override public void run() {
             if (!AppPreferences.secondaryEnabled(LyricsDisplayService.this)
                     || AppPreferences.serviceStoppedByUser(LyricsDisplayService.this)
-                    || !canDrawOverlays() || shouldHideOverlays()) return;
+                    || !canDrawOverlays() || shouldHideOverlays(true)) return;
             rebuildSecondary();
             if (secondaryPanel == null) scheduleSecondaryRetry("still_unavailable");
+        }
+    };
+    /** The status bar's WindowManager is often the last surface ready during automotive boot. */
+    private final Runnable statusLyricRetry = new Runnable() {
+        @Override public void run() {
+            if (!AppPreferences.topLyricStrip(LyricsDisplayService.this)
+                    || AppPreferences.serviceStoppedByUser(LyricsDisplayService.this)
+                    || !canDrawOverlays() || shouldHideOverlays()) return;
+            showStatusLyricStrip();
         }
     };
     private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
@@ -288,6 +299,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         communityHandler.removeCallbacks(communityHeartbeat);
         notificationHandler.removeCallbacks(notificationRefresh);
         recoveryHandler.removeCallbacks(listenerHealthProbe);
+        recoveryHandler.removeCallbacks(statusLyricRetry);
         recoveryHandler.removeCallbacks(secondaryRetry);
         unregisterScreenReceiver();
         if (displayManager != null) displayManager.unregisterDisplayListener(this);
@@ -317,7 +329,8 @@ public final class LyricsDisplayService extends Service implements DisplayManage
 
     private void rebuildAll() {
         AudioSpectrumSource.sync(this);
-        overlaysHiddenForPlayback = shouldHideOverlays();
+        overlaysHiddenForPlayback = shouldHideOverlays(false);
+        secondaryHiddenForPlayback = shouldHideOverlays(true);
         DiagnosticLog.record(this, "Overlay", "rebuild main=" + AppPreferences.mainEnabled(this)
                 + " secondary=" + AppPreferences.secondaryEnabled(this)
                 + " ruleHidden=" + overlaysHiddenForPlayback
@@ -349,22 +362,19 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         dismissMain();
         dismissSecondary();
         dismissBottomSpectrum();
-        if (overlaysHiddenForPlayback) {
-            dismissStatusLyricStrip();
-            return;
-        }
-        if (AppPreferences.mainEnabled(this) && !settingsVisible) showMain();
-        if (AppPreferences.secondaryEnabled(this)) showSecondary();
+        if (overlaysHiddenForPlayback) dismissStatusLyricStrip();
+        else if (AppPreferences.mainEnabled(this) && !settingsVisible) showMain();
+        if (AppPreferences.secondaryEnabled(this) && !secondaryHiddenForPlayback) showSecondary();
         else recoveryHandler.removeCallbacks(secondaryRetry);
-        if (AppPreferences.topLyricStrip(this)) showStatusLyricStrip();
+        if (!overlaysHiddenForPlayback && AppPreferences.topLyricStrip(this)) showStatusLyricStrip();
         else dismissStatusLyricStrip();
-        if (AppPreferences.bottomSpectrum(this)) showBottomSpectrum();
+        if (!overlaysHiddenForPlayback && AppPreferences.bottomSpectrum(this)) showBottomSpectrum();
     }
 
     private void rebuildSecondary() {
         dismissSecondary();
         if (AppPreferences.secondaryEnabled(this) && canDrawOverlays()
-                && !shouldHideOverlays()) {
+                && !shouldHideOverlays(true)) {
             showSecondary();
         }
     }
@@ -377,12 +387,14 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         int height = Math.min(dp(this, AppPreferences.panelHeightDp(this)), screen.y);
         mainPanel = new LyricsPanelView(this, false);
         mainParams = overlayParams(width, height);
-        mainParams.x = clamp(AppPreferences.get(this).getInt(AppPreferences.KEY_MAIN_X, dp(this, 18)),
+        String style = AppPreferences.overlayStyle(this, false);
+        String xKey = AppPreferences.overlayPositionKey(false, style, true);
+        String yKey = AppPreferences.overlayPositionKey(false, style, false);
+        mainParams.x = clamp(AppPreferences.overlayPosition(this, false, style, true, dp(this, 18)),
                 0, Math.max(0, screen.x - width));
-        mainParams.y = clamp(AppPreferences.get(this).getInt(AppPreferences.KEY_MAIN_Y, dp(this, 100)),
+        mainParams.y = clamp(AppPreferences.overlayPosition(this, false, style, false, dp(this, 100)),
                 0, Math.max(0, screen.y - height));
-        attachDrag(mainPanel, mainWindowManager, mainParams, screen,
-                AppPreferences.KEY_MAIN_X, AppPreferences.KEY_MAIN_Y, true, false);
+        attachDrag(mainPanel, mainWindowManager, mainParams, screen, xKey, yKey, true, false);
         try {
             mainWindowManager.addView(mainPanel, mainParams);
             DiagnosticLog.record(this, "Overlay", "main attached position=" + mainParams.x
@@ -429,18 +441,15 @@ public final class LyricsDisplayService extends Service implements DisplayManage
             secondaryParams = overlayParams(width, height);
             int defaultX = Math.max(0, (screen.x - width) / 2);
             int defaultY = Math.max(0, Math.round(screen.y * 0.10f));
-            if (!AppPreferences.get(this).contains(AppPreferences.KEY_SECONDARY_X)
-                    || !AppPreferences.get(this).contains(AppPreferences.KEY_SECONDARY_Y)) {
-                AppPreferences.get(this).edit()
-                        .putInt(AppPreferences.KEY_SECONDARY_X, defaultX)
-                        .putInt(AppPreferences.KEY_SECONDARY_Y, defaultY).apply();
-            }
-            secondaryParams.x = clamp(AppPreferences.get(this).getInt(
-                    AppPreferences.KEY_SECONDARY_X, defaultX), 0, Math.max(0, screen.x - width));
-            secondaryParams.y = clamp(AppPreferences.get(this).getInt(
-                    AppPreferences.KEY_SECONDARY_Y, defaultY), 0, Math.max(0, screen.y - height));
+            String style = AppPreferences.overlayStyle(this, true);
+            String xKey = AppPreferences.overlayPositionKey(true, style, true);
+            String yKey = AppPreferences.overlayPositionKey(true, style, false);
+            secondaryParams.x = clamp(AppPreferences.overlayPosition(this, true, style, true, defaultX),
+                    0, Math.max(0, screen.x - width));
+            secondaryParams.y = clamp(AppPreferences.overlayPosition(this, true, style, false, defaultY),
+                    0, Math.max(0, screen.y - height));
             attachDrag(secondaryPanel, secondaryWindowManager, secondaryParams, screen,
-                    AppPreferences.KEY_SECONDARY_X, AppPreferences.KEY_SECONDARY_Y, false, true);
+                    xKey, yKey, false, true);
             secondaryWindowManager.addView(secondaryPanel, secondaryParams);
             DiagnosticLog.record(this, "Display", "secondary attached id="
                     + display.getDisplayId() + " name=" + display.getName() + " position="
@@ -483,9 +492,10 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                 Math.max(0, screen.x - secondaryParams.width));
         secondaryParams.y = clamp(secondaryParams.y + dy, 0,
                 Math.max(0, screen.y - secondaryParams.height));
+        String style = AppPreferences.overlayStyle(this, true);
         AppPreferences.get(this).edit()
-                .putInt(AppPreferences.KEY_SECONDARY_X, secondaryParams.x)
-                .putInt(AppPreferences.KEY_SECONDARY_Y, secondaryParams.y).apply();
+                .putInt(AppPreferences.overlayPositionKey(true, style, true), secondaryParams.x)
+                .putInt(AppPreferences.overlayPositionKey(true, style, false), secondaryParams.y).apply();
         try { secondaryWindowManager.updateViewLayout(secondaryPanel, secondaryParams); }
         catch (Throwable error) { Log.w(TAG, "Unable to move secondary overlay", error); }
     }
@@ -966,7 +976,9 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         // Keep the transparent renderer in the status area. System icons remain on top and
         // the two lyric lines are centered through the remaining horizontal space.
         params.width = stripWidth;
-        params.x = (screenWidth - stripWidth) / 2 + dp(this, AppPreferences.topLyricOffsetXDp(this));
+        int centeredX = (screenWidth - stripWidth) / 2;
+        params.x = clamp(centeredX + dp(this, AppPreferences.topLyricOffsetXDp(this)),
+                0, Math.max(0, screenWidth - stripWidth));
         params.y = -Math.max(dp(this, 6), topInset * 2 / 3)
                 + dp(this, AppPreferences.topLyricOffsetYDp(this));
         // This strip is informational only: every tap falls through to the launcher/player.
@@ -982,6 +994,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
             } catch (Throwable error) {
                 Log.w(TAG, "Unable to update top lyric strip", error);
                 dismissStatusLyricStrip();
+                scheduleStatusLyricRetry();
             }
             return;
         }
@@ -992,13 +1005,27 @@ public final class LyricsDisplayService extends Service implements DisplayManage
             statusLyricStrip = strip;
             statusLyricParams = params;
             strip.reloadStyle();
+            statusLyricRetryAttempts = 0;
+            recoveryHandler.removeCallbacks(statusLyricRetry);
             DiagnosticLog.record(this, "Overlay", "top lyric strip attached widthPx="
                     + screenWidth + " heightPx=" + params.height);
         } catch (Throwable error) {
             Log.w(TAG, "Unable to add top lyric strip", error);
+            DiagnosticLog.record(this, "Overlay", "top lyric strip attach failed="
+                    + error.getClass().getSimpleName());
             statusLyricStrip = null;
             statusLyricParams = null;
+            scheduleStatusLyricRetry();
         }
+    }
+
+    private void scheduleStatusLyricRetry() {
+        if (!AppPreferences.topLyricStrip(this) || statusLyricRetryAttempts >= 5) return;
+        long delay = Math.min(15_000L, 1_500L << statusLyricRetryAttempts++);
+        recoveryHandler.removeCallbacks(statusLyricRetry);
+        recoveryHandler.postDelayed(statusLyricRetry, delay);
+        DiagnosticLog.record(this, "Overlay", "top lyric strip retry="
+                + statusLyricRetryAttempts + " delayMs=" + delay);
     }
 
     private void showBottomSpectrum() {
@@ -1059,6 +1086,10 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         }
         statusLyricStrip = null;
         statusLyricParams = null;
+        if (!AppPreferences.topLyricStrip(this)) {
+            statusLyricRetryAttempts = 0;
+            recoveryHandler.removeCallbacks(statusLyricRetry);
+        }
     }
 
     private int statusBarHeightPx() {
@@ -1137,18 +1168,29 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     }
 
     private boolean shouldHideOverlays() {
+        return shouldHideOverlays(false);
+    }
+
+    private boolean shouldHideOverlays(boolean secondary) {
         MusicSnapshot snapshot = MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(this));
-        return shouldHideOverlays(snapshot);
+        return shouldHideOverlays(snapshot, secondary);
     }
 
     private boolean shouldHideOverlays(MusicSnapshot snapshot) {
+        return shouldHideOverlays(snapshot, false);
+    }
+
+    private boolean shouldHideOverlays(MusicSnapshot snapshot, boolean secondary) {
         boolean hideInPlayer = AppPreferences.hideOverlaysInPlayer(this);
         java.util.Set<String> hiddenApps = AppPreferences.hiddenOverlayApps(this);
         String foregroundPackage = hideInPlayer || !hiddenApps.isEmpty()
                 ? ForegroundAppDetector.foregroundPackage(this) : "";
         boolean playerInForeground = hideInPlayer && ForegroundAppDetector.samePackage(
                 MusicNotificationListener.activePlayerPackageName(), foregroundPackage);
-        boolean hiddenAppInForeground = !foregroundPackage.isEmpty()
+        boolean hideOnThisDisplay = secondary
+                ? AppPreferences.hideSelectedAppsOnSecondary(this)
+                : AppPreferences.hideSelectedAppsOnMain(this);
+        boolean hiddenAppInForeground = hideOnThisDisplay && !foregroundPackage.isEmpty()
                 && hiddenApps.contains(foregroundPackage);
         return OverlayPlaybackVisibility.shouldHide(
                 AppPreferences.hideOverlaysWhenNotPlaying(this), snapshot.playing,
@@ -1156,22 +1198,28 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     }
 
     private void syncOverlayVisibility(MusicSnapshot snapshot) {
-        boolean shouldHide = shouldHideOverlays(snapshot);
-        if (shouldHide == overlaysHiddenForPlayback) return;
-        overlaysHiddenForPlayback = shouldHide;
-        DiagnosticLog.record(this, "Overlay", shouldHide
-                ? "hidden by visibility rule"
-                : "restored because no visibility rule matches");
-        if (shouldHide) {
+        boolean hideMain = shouldHideOverlays(snapshot, false);
+        boolean hideSecondary = shouldHideOverlays(snapshot, true);
+        if (hideMain == overlaysHiddenForPlayback && hideSecondary == secondaryHiddenForPlayback) return;
+        overlaysHiddenForPlayback = hideMain;
+        secondaryHiddenForPlayback = hideSecondary;
+        DiagnosticLog.record(this, "Overlay", "visibility mainHidden=" + hideMain
+                + " secondaryHidden=" + hideSecondary);
+        if (hideMain) {
             dismissMain();
-            dismissSecondary();
+            dismissStatusLyricStrip();
             dismissBottomSpectrum();
-            return;
+        } else if (canDrawOverlays()) {
+            if (AppPreferences.mainEnabled(this) && !settingsVisible && mainPanel == null) showMain();
+            if (AppPreferences.topLyricStrip(this) && statusLyricStrip == null) showStatusLyricStrip();
+            if (AppPreferences.bottomSpectrum(this) && bottomSpectrumView == null) showBottomSpectrum();
         }
-        if (!canDrawOverlays()) return;
-        if (AppPreferences.mainEnabled(this) && !settingsVisible && mainPanel == null) showMain();
-        if (AppPreferences.secondaryEnabled(this) && secondaryPanel == null) showSecondary();
-        if (AppPreferences.bottomSpectrum(this) && bottomSpectrumView == null) showBottomSpectrum();
+        if (hideSecondary) {
+            dismissSecondary();
+        } else if (canDrawOverlays() && AppPreferences.secondaryEnabled(this)
+                && secondaryPanel == null) {
+            showSecondary();
+        }
     }
 
     private Notification createNotification() {

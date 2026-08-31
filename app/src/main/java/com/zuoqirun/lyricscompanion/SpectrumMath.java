@@ -19,11 +19,14 @@ final class SpectrumMath {
 
     static final class Analyzer {
         private final float[] smoothed = new float[BAND_COUNT];
+        private final float[] sums = new float[BAND_COUNT];
+        private final int[] counts = new int[BAND_COUNT];
+        private final float[] magnitudes = new float[BAND_COUNT];
         private float referenceLevel;
 
         float[] process(byte[] fft, int samplingRateMilliHz) {
-            float[] sums = new float[BAND_COUNT];
-            int[] counts = new int[BAND_COUNT];
+            java.util.Arrays.fill(sums, 0f);
+            java.util.Arrays.fill(counts, 0);
             float sampleRateHz = samplingRateMilliHz / 1000f;
             if (fft == null || fft.length < 4 || sampleRateHz <= 0f) return new float[BAND_COUNT];
             int complexBins = fft.length / 2;
@@ -37,7 +40,7 @@ final class SpectrumMath {
                 sums[band] += real * real + imaginary * imaginary;
                 counts[band]++;
             }
-            float[] magnitudes = new float[BAND_COUNT];
+            java.util.Arrays.fill(magnitudes, 0f);
             for (int i = 0; i < BAND_COUNT; i++) {
                 if (counts[i] > 0) magnitudes[i] = (float) Math.sqrt(sums[i] / counts[i]);
             }

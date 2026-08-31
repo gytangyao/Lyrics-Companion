@@ -79,6 +79,10 @@ public final class OverlayVisibilitySettingsActivity extends AppCompatActivity {
         addCard(root, rules);
 
         LinearLayout appRules = card("指定应用隐藏");
+        addTargetToggle(appRules, "命中时隐藏主屏歌词", AppPreferences.KEY_HIDE_SELECTED_APPS_ON_MAIN,
+                AppPreferences.hideSelectedAppsOnMain(this));
+        addTargetToggle(appRules, "命中时隐藏副屏歌词", AppPreferences.KEY_HIDE_SELECTED_APPS_ON_SECONDARY,
+                AppPreferences.hideSelectedAppsOnSecondary(this));
         hiddenAppsSummary = text("", 13, 0xFFD8E1EE, false);
         hiddenAppsSummary.setPadding(0, dp(10), 0, dp(10));
         appRules.addView(hiddenAppsSummary);
@@ -123,6 +127,21 @@ public final class OverlayVisibilitySettingsActivity extends AppCompatActivity {
                 SafeToast.show(this, "请在首页“使用权限”中授权使用情况访问",
                         Toast.LENGTH_LONG);
             }
+        });
+        parent.addView(toggle);
+    }
+
+    private void addTargetToggle(LinearLayout parent, String title, String key, boolean initial) {
+        MaterialSwitch toggle = new MaterialSwitch(this);
+        toggle.setText(title);
+        toggle.setTextColor(0xFFF3F7FC);
+        toggle.setTextSize(14f);
+        toggle.setPadding(0, dp(8), 0, 0);
+        toggle.setChecked(initial);
+        toggle.setOnCheckedChangeListener((button, checked) -> {
+            AppPreferences.get(this).edit().putBoolean(key, checked).apply();
+            AppPreferences.changed(this);
+            refreshHiddenAppsSummary();
         });
         parent.addView(toggle);
     }
@@ -217,9 +236,14 @@ public final class OverlayVisibilitySettingsActivity extends AppCompatActivity {
     private void refreshHiddenAppsSummary() {
         if (hiddenAppsSummary == null) return;
         int count = AppPreferences.hiddenOverlayApps(this).size();
+        String targets = (AppPreferences.hideSelectedAppsOnMain(this) ? "主屏" : "")
+                + (AppPreferences.hideSelectedAppsOnMain(this)
+                && AppPreferences.hideSelectedAppsOnSecondary(this) ? "、" : "")
+                + (AppPreferences.hideSelectedAppsOnSecondary(this) ? "副屏" : "");
         hiddenAppsSummary.setText(count == 0
                 ? "未选择应用，歌词不会因打开其它应用而隐藏"
-                : "已选择 " + count + " 个应用，进入时自动隐藏，离开后恢复");
+                : targets.isEmpty() ? "已选择 " + count + " 个应用，但尚未选择要隐藏的屏幕"
+                : "已选择 " + count + " 个应用，进入时隐藏" + targets + "歌词，离开后恢复");
     }
 
     private LinearLayout card(String title) {

@@ -61,13 +61,13 @@ public final class MainActivity extends AppCompatActivity {
     private static final int REQUEST_LOCAL_LYRIC_DIRECTORY = 2419;
     private static final int REQUEST_BLUETOOTH_CONNECT = 2420;
     private static final String STATE_SELECTED_SECTION = "selected_section";
-    private static final String[] SECTION_LABELS = {"首页", "显示", "歌词", "系统"};
-    private static final String[] SECTION_TITLES = {"首页概览", "显示设置", "歌词设置", "系统与支持"};
+    private static final String[] SECTION_LABELS = {"总览", "显示", "歌词", "高级"};
+    private static final String[] SECTION_TITLES = {"设置总览", "显示与外观", "歌词来源与校准", "高级与维护"};
     private static final String[] SECTION_DESCRIPTIONS = {
-            "查看实时效果、连接状态与必要权限",
-            "管理悬浮窗、屏幕、样式和播放控件",
-            "选择歌词来源，并检查匹配与播放状态",
-            "更新应用、发送反馈并查看开源信息"
+            "先完成必要权限，打开需要的歌词出口，再通过实时预览确认效果",
+            "按主屏、副屏和顶部歌词条查找尺寸、样式、颜色与位置设置",
+            "管理词库优先级、本地歌词、蓝牙识别和匹配修正",
+            "管理启动与交互、诊断、更新、数据、反馈和开源信息"
     };
     private static final String UPDATE_MANIFEST_URL =
             "https://lyrics-companion.zuoqirun.top/update.json";
@@ -127,6 +127,7 @@ public final class MainActivity extends AppCompatActivity {
     private boolean listenerReconnectScheduled;
     private long listenerReconnectDeadlineElapsedMs;
     private boolean launcherDispatch;
+    private boolean conciseSettingsMode;
 
     private final Runnable statusRefresh = new Runnable() {
         @Override public void run() {
@@ -321,6 +322,7 @@ public final class MainActivity extends AppCompatActivity {
     private View buildContent() {
         sectionPages.clear();
         sectionButtons.clear();
+        conciseSettingsMode = AppPreferences.conciseSettingsMode(this);
         View shell = getLayoutInflater().inflate(R.layout.activity_main, null, false);
         LinearLayout root = shell.findViewById(R.id.main_content);
         LinearLayout pageHost = shell.findViewById(R.id.main_page_host);
@@ -406,7 +408,7 @@ public final class MainActivity extends AppCompatActivity {
         lyricCard.addView(avrcp);
 
         LinearLayout outputCard = card();
-        outputCard.addView(sectionLabel("悬浮歌词"));
+        outputCard.addView(sectionLabel("歌词显示开关"));
         mainOverlaySwitch = toggle("主屏悬浮窗",
                 "离开设置页后显示；可拖动，双击强制返回，长按锁定并开启触摸穿透；点击圆形 × 按钮可恢复");
         mainOverlaySwitch.setOnCheckedChangeListener((button, checked) -> {
@@ -466,13 +468,16 @@ public final class MainActivity extends AppCompatActivity {
                 .edit().putBoolean(AppPreferences.KEY_TAP_OVERLAY_RETURNS_TO_PLAYER, checked)
                 .apply());
         startupCard.addView(returnToPlayer);
+        addPlaybackControlToggles(startupCard);
 
-        MaterialButton visibilityRules = button("悬浮窗隐藏规则", false);
+        LinearLayout visibilityCard = card();
+        visibilityCard.addView(sectionLabel("可见性与特殊输出"));
+        MaterialButton visibilityRules = button("悬浮窗隐藏与自动隐藏规则", true);
         visibilityRules.setOnClickListener(v -> startActivity(
                 new Intent(this, OverlayVisibilitySettingsActivity.class)));
         LinearLayout.LayoutParams visibilityRuleParams = new LinearLayout.LayoutParams(-1, dp(48));
         visibilityRuleParams.topMargin = dp(10);
-        outputCard.addView(visibilityRules, visibilityRuleParams);
+        visibilityCard.addView(visibilityRules, visibilityRuleParams);
 
         MaterialSwitch topLyricStrip = toggle("通知栏显示歌词",
                 "在桌面顶部透明显示紧凑双行歌词（本句/下句、居中、逐字高亮）；需要悬浮窗权限，并会被图标启动和自启动记忆");
@@ -500,7 +505,7 @@ public final class MainActivity extends AppCompatActivity {
                 new Intent(this, StatusLyricSettingsActivity.class)));
         LinearLayout.LayoutParams statusLyricSettingsParams = new LinearLayout.LayoutParams(-1, dp(48));
         statusLyricSettingsParams.topMargin = dp(8);
-        outputCard.addView(statusLyricSettings, statusLyricSettingsParams);
+        visibilityCard.addView(statusLyricSettings, statusLyricSettingsParams);
 
         MaterialButton stopService = button("关闭服务并退出", false);
         stopService.setOnClickListener(v -> confirmStopServiceAndExit());
@@ -571,15 +576,14 @@ public final class MainActivity extends AppCompatActivity {
         addDisplaySettingsLaunchers(styleCard);
 
         LinearLayout appearanceCard = card();
-        appearanceCard.addView(sectionLabel("主题、字体与控件"));
+        appearanceCard.addView(sectionLabel("颜色、主题与字体"));
         addThemeSelector(appearanceCard);
-        MaterialButton colors = button("自定义颜色", true);
+        MaterialButton colors = button("歌词颜色、描边与频谱颜色", true);
         colors.setOnClickListener(v -> startActivity(new Intent(this, ColorSettingsActivity.class)));
         LinearLayout.LayoutParams colorParams = new LinearLayout.LayoutParams(-1, dp(48));
         colorParams.topMargin = dp(10);
         appearanceCard.addView(colors, colorParams);
         addGlobalFontControls(appearanceCard);
-        addPlaybackControlToggles(appearanceCard);
 
         LinearLayout updateCard = card();
         updateCard.addView(sectionLabel("应用更新"));
@@ -681,20 +685,38 @@ public final class MainActivity extends AppCompatActivity {
         rematchParams.topMargin = dp(12);
         stateCard.addView(rematchLyrics, rematchParams);
 
+        LinearLayout settingsModeCard = buildSettingsModeCard();
+        LinearLayout quickControlCard = buildQuickControlCard();
+        LinearLayout displayDirectoryCard = buildDisplayDirectoryCard();
+
         LinearLayout homePage = sectionPage();
-        homePage.addView(previewCard, cardMargins());
-        homePage.addView(accessCard, cardMargins());
+        homePage.addView(settingsModeCard, cardMargins());
+        if (conciseSettingsMode) {
+            homePage.addView(previewCard, cardMargins());
+            homePage.addView(quickControlCard, cardMargins());
+        } else {
+            homePage.addView(buildGettingStartedCard(), cardMargins());
+            homePage.addView(accessCard, cardMargins());
+            homePage.addView(outputCard, cardMargins());
+            homePage.addView(previewCard, cardMargins());
+        }
 
         LinearLayout displayPage = sectionPage();
-        if (useSideNavigation()) {
+        if (conciseSettingsMode) {
+            TextView hint = text("只保留每天会调的尺寸、字号和透明度。颜色、描边、样式、位置规则、频谱和高级交互请切换到完整模式。", 13,
+                    0xFF8392A8, false);
+            hint.setPadding(0, dp(10), 0, dp(4));
+            displayPage.addView(hint);
+            displayPage.addView(buildQuickDisplayCard(), cardMargins());
+        } else if (useSideNavigation()) {
             LinearLayout displayColumns = new LinearLayout(this);
             displayColumns.setOrientation(LinearLayout.HORIZONTAL);
             displayColumns.setBaselineAligned(false);
             LinearLayout leftColumn = sectionPage();
             LinearLayout rightColumn = sectionPage();
-            leftColumn.addView(outputCard, cardMargins());
-            leftColumn.addView(startupCard, cardMargins());
+            leftColumn.addView(displayDirectoryCard, cardMargins());
             leftColumn.addView(screenCard, cardMargins());
+            leftColumn.addView(visibilityCard, cardMargins());
             rightColumn.addView(styleCard, cardMargins());
             rightColumn.addView(appearanceCard, cardMargins());
             displayColumns.addView(leftColumn, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -704,9 +726,9 @@ public final class MainActivity extends AppCompatActivity {
             displayColumns.addView(rightColumn, rightColumnParams);
             displayPage.addView(displayColumns, new LinearLayout.LayoutParams(-1, -2));
         } else {
-            displayPage.addView(outputCard, cardMargins());
-            displayPage.addView(startupCard, cardMargins());
+            displayPage.addView(displayDirectoryCard, cardMargins());
             displayPage.addView(screenCard, cardMargins());
+            displayPage.addView(visibilityCard, cardMargins());
             displayPage.addView(styleCard, cardMargins());
             displayPage.addView(appearanceCard, cardMargins());
         }
@@ -716,10 +738,16 @@ public final class MainActivity extends AppCompatActivity {
         lyricsPage.addView(stateCard, cardMargins());
 
         LinearLayout systemPage = sectionPage();
-        systemPage.addView(communityCard, cardMargins());
-        systemPage.addView(updateCard, cardMargins());
-        systemPage.addView(resetCard, cardMargins());
-        systemPage.addView(openSourceCard, cardMargins());
+        if (conciseSettingsMode) {
+            systemPage.addView(accessCard, cardMargins());
+            systemPage.addView(updateCard, cardMargins());
+        } else {
+            systemPage.addView(startupCard, cardMargins());
+            systemPage.addView(communityCard, cardMargins());
+            systemPage.addView(updateCard, cardMargins());
+            systemPage.addView(resetCard, cardMargins());
+            systemPage.addView(openSourceCard, cardMargins());
+        }
 
         TextView footnote = text("提示：支持发布 MediaSession 的在线、本地和 U 盘音乐播放器；文件名会自动清理路径、序号、扩展名和音质标记，仍不准确时可用“修正歌曲信息并重新匹配”。歌词伴侣不会向 iPhone CarPlay 仪表盘注入媒体信息。", 12,
                 0xFF66788F, false);
@@ -741,6 +769,168 @@ public final class MainActivity extends AppCompatActivity {
         return shell;
     }
 
+    private LinearLayout buildSettingsModeCard() {
+        LinearLayout card = card();
+        card.addView(sectionLabel("设置模式"));
+        TextView summary = text(conciseSettingsMode
+                        ? "精简模式：仅显示日常开关和常用入口，减少车机上的滚动与干扰。"
+                        : "完整模式：显示所有显示、样式、位置、颜色、歌词、诊断和系统选项。",
+                13, 0xFFD8E1EE, false);
+        summary.setPadding(0, dp(8), 0, dp(10));
+        summary.setLineSpacing(0f, 1.18f);
+        card.addView(summary);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        MaterialButton concise = button("精简模式", conciseSettingsMode);
+        concise.setOnClickListener(v -> switchSettingsMode(true));
+        row.addView(concise, weightedButton());
+        MaterialButton complete = button("完整模式", !conciseSettingsMode);
+        complete.setOnClickListener(v -> switchSettingsMode(false));
+        LinearLayout.LayoutParams completeParams = weightedButton();
+        completeParams.leftMargin = dp(10);
+        row.addView(complete, completeParams);
+        card.addView(row);
+        addSettingsUiScaleSelector(card);
+        return card;
+    }
+
+    private LinearLayout buildGettingStartedCard() {
+        LinearLayout card = card();
+        card.addView(sectionLabel("第一次使用，按这 3 步"));
+        TextView steps = text(
+                "1  授予“音乐读取权限”和“悬浮窗权限”\n"
+                        + "2  打开主屏、副屏或顶部歌词条\n"
+                        + "3  在下方预览确认歌词，再到“显示”微调样式",
+                13, 0xFFD8E1EE, false);
+        steps.setLineSpacing(dp(4), 1.16f);
+        steps.setPadding(0, dp(9), 0, dp(4));
+        card.addView(steps);
+        TextView expert = text("熟悉应用后，可直接使用顶部分类；每个显示对象都有独立参数入口。",
+                12, 0xFF8392A8, false);
+        expert.setPadding(0, dp(5), 0, 0);
+        card.addView(expert);
+        return card;
+    }
+
+    private LinearLayout buildDisplayDirectoryCard() {
+        LinearLayout card = card();
+        card.addView(sectionLabel("按显示对象直达"));
+        TextView summary = text("先选你想改变的对象；主屏和副屏的尺寸、字号等参数互不影响。",
+                13, 0xFFD8E1EE, false);
+        summary.setPadding(0, dp(8), 0, dp(10));
+        card.addView(summary);
+
+        LinearLayout screenRow = new LinearLayout(this);
+        screenRow.setOrientation(LinearLayout.HORIZONTAL);
+        MaterialButton main = button("主屏参数", true);
+        main.setOnClickListener(v -> startActivity(new Intent(this, DisplaySettingsActivity.class)
+                .putExtra(DisplaySettingsActivity.EXTRA_SECONDARY, false)));
+        screenRow.addView(main, weightedButton());
+        MaterialButton secondary = button("副屏参数", false);
+        secondary.setOnClickListener(v -> startActivity(new Intent(this, DisplaySettingsActivity.class)
+                .putExtra(DisplaySettingsActivity.EXTRA_SECONDARY, true)));
+        LinearLayout.LayoutParams secondaryParams = weightedButton();
+        secondaryParams.leftMargin = dp(10);
+        screenRow.addView(secondary, secondaryParams);
+        card.addView(screenRow);
+
+        LinearLayout detailRow = new LinearLayout(this);
+        detailRow.setOrientation(LinearLayout.HORIZONTAL);
+        MaterialButton topLyric = button("顶部歌词条", false);
+        topLyric.setOnClickListener(v -> startActivity(
+                new Intent(this, StatusLyricSettingsActivity.class)));
+        detailRow.addView(topLyric, weightedButton());
+        MaterialButton colors = button("颜色与描边", false);
+        colors.setOnClickListener(v -> startActivity(new Intent(this, ColorSettingsActivity.class)));
+        LinearLayout.LayoutParams colorsParams = weightedButton();
+        colorsParams.leftMargin = dp(10);
+        detailRow.addView(colors, colorsParams);
+        LinearLayout.LayoutParams detailRowParams = new LinearLayout.LayoutParams(-1, dp(48));
+        detailRowParams.topMargin = dp(8);
+        card.addView(detailRow, detailRowParams);
+
+        TextView map = text("继续向下：副屏选择与位置 · 样式及专属参数 · 颜色主题与字体 · 隐藏规则",
+                12, 0xFF8392A8, false);
+        map.setPadding(0, dp(10), 0, 0);
+        card.addView(map);
+        return card;
+    }
+
+    private void switchSettingsMode(boolean concise) {
+        if (concise == conciseSettingsMode) return;
+        AppPreferences.setConciseSettingsMode(this, concise);
+        selectedSection = 0;
+        recreate();
+    }
+
+    /** A deliberately small surface for users who only need to turn lyrics on and adjust them. */
+    private LinearLayout buildQuickControlCard() {
+        LinearLayout card = card();
+        card.addView(sectionLabel("每天会用的控制"));
+        card.addView(quickOverlayToggle("主屏悬浮歌词", AppPreferences.KEY_MAIN_OVERLAY,
+                AppPreferences.mainEnabled(this), "在主屏显示歌词悬浮窗"));
+        card.addView(quickOverlayToggle("副屏 / 仪表盘歌词", AppPreferences.KEY_SECONDARY_OVERLAY,
+                AppPreferences.secondaryEnabled(this), "在选中的副屏独立显示歌词"));
+        card.addView(quickOverlayToggle("顶部歌词条", AppPreferences.KEY_TOP_LYRIC_STRIP,
+                AppPreferences.topLyricStrip(this), "在状态栏附近显示当前歌词"));
+        MaterialButton displaySettings = button("调整主屏大小、字号和透明度", true);
+        displaySettings.setOnClickListener(v -> startActivity(
+                new Intent(this, QuickDisplaySettingsActivity.class)));
+        LinearLayout.LayoutParams displayParams = new LinearLayout.LayoutParams(-1, dp(48));
+        displayParams.topMargin = dp(10);
+        card.addView(displaySettings, displayParams);
+        MaterialButton allSettings = button("查看全部设置（颜色、样式、频谱等）", false);
+        allSettings.setOnClickListener(v -> switchToCompleteDisplaySettings());
+        LinearLayout.LayoutParams allSettingsParams = new LinearLayout.LayoutParams(-1, dp(48));
+        allSettingsParams.topMargin = dp(8);
+        card.addView(allSettings, allSettingsParams);
+        return card;
+    }
+
+    private LinearLayout buildQuickDisplayCard() {
+        LinearLayout card = card();
+        card.addView(sectionLabel("日常显示调整"));
+        TextView summary = text("尺寸、字号和透明度是最常需要改动的参数；主屏与副屏互不影响。", 13,
+                0xFFD8E1EE, false);
+        summary.setPadding(0, dp(8), 0, dp(10));
+        card.addView(summary);
+        MaterialButton main = button("调整主屏显示", true);
+        main.setOnClickListener(v -> startActivity(new Intent(this, QuickDisplaySettingsActivity.class)));
+        card.addView(main, new LinearLayout.LayoutParams(-1, dp(48)));
+        MaterialButton secondary = button("调整副屏 / 仪表盘显示", false);
+        secondary.setOnClickListener(v -> startActivity(new Intent(this, QuickDisplaySettingsActivity.class)
+                .putExtra(QuickDisplaySettingsActivity.EXTRA_SECONDARY, true)));
+        LinearLayout.LayoutParams secondaryParams = new LinearLayout.LayoutParams(-1, dp(48));
+        secondaryParams.topMargin = dp(8);
+        card.addView(secondary, secondaryParams);
+        MaterialButton complete = button("需要更多显示设置", false);
+        complete.setOnClickListener(v -> switchToCompleteDisplaySettings());
+        LinearLayout.LayoutParams completeParams = new LinearLayout.LayoutParams(-1, dp(48));
+        completeParams.topMargin = dp(8);
+        card.addView(complete, completeParams);
+        return card;
+    }
+
+    private void switchToCompleteDisplaySettings() {
+        AppPreferences.setConciseSettingsMode(this, false);
+        selectedSection = 1;
+        recreate();
+    }
+
+    private MaterialSwitch quickOverlayToggle(String title, String key, boolean enabled,
+                                               String description) {
+        MaterialSwitch toggle = toggle(title, description);
+        toggle.setChecked(enabled);
+        toggle.setOnCheckedChangeListener((button, checked) -> {
+            AppPreferences.get(this).edit().putBoolean(key, checked).apply();
+            if (checked && !canDrawOverlays()) showPermissionHomeHint("悬浮窗");
+            AppPreferences.setServiceStoppedByUser(this, false);
+            AppPreferences.changed(this);
+            AudioSpectrumSource.sync(this);
+        });
+        return toggle;
+    }
+
     private LinearLayout sectionPage() {
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
@@ -752,13 +942,14 @@ public final class MainActivity extends AppCompatActivity {
         for (int index = 0; index < ids.length; index++) {
             final int section = index;
             MaterialButton item = shell.findViewById(ids[index]);
+            item.setText(navigationLabel(index));
             item.setTextSize(12f);
             item.setMinWidth(0);
             item.setMinimumWidth(0);
             item.setMinHeight(0);
             item.setMinimumHeight(0);
             item.setCornerRadius(dp(16));
-            item.setContentDescription("打开" + SECTION_LABELS[index] + "分类");
+            item.setContentDescription("打开" + navigationLabel(index) + "分类");
             item.setOnClickListener(v -> selectSection(section));
             sectionButtons.add(item);
         }
@@ -779,13 +970,36 @@ public final class MainActivity extends AppCompatActivity {
             item.setBackgroundTintList(ColorStateList.valueOf(
                     selected ? 0xFF6EE7F2 : Color.TRANSPARENT));
         }
-        if (sectionHeading != null) sectionHeading.setText(SECTION_TITLES[section]);
+        if (sectionHeading != null) sectionHeading.setText(sectionTitle(section));
         if (sectionDescription != null) {
-            sectionDescription.setText(SECTION_DESCRIPTIONS[section]);
+            sectionDescription.setText(sectionDescription(section));
         }
         if (sectionChanged && mainScroll != null) {
             mainScroll.post(() -> mainScroll.scrollTo(0, 0));
         }
+    }
+
+    private String sectionTitle(int section) {
+        if (!conciseSettingsMode) return SECTION_TITLES[section];
+        String[] titles = {"每天会用", "日常显示调整", "歌词与匹配", "权限与更新"};
+        return titles[section];
+    }
+
+    private String navigationLabel(int section) {
+        if (!conciseSettingsMode) return SECTION_LABELS[section];
+        String[] labels = {"常用", "显示", "歌词", "维护"};
+        return labels[section];
+    }
+
+    private String sectionDescription(int section) {
+        if (!conciseSettingsMode) return SECTION_DESCRIPTIONS[section];
+        String[] descriptions = {
+                "开关主屏、副屏或顶部歌词，并快速进入日常调整",
+                "只调整尺寸、字号和透明度，不显示颜色等专家参数",
+                "选择歌词来源并查看当前播放状态",
+                "完成权限、查看更新；诊断与更多选项在完整模式中提供"
+        };
+        return descriptions[section];
     }
 
     private void confirmStopServiceAndExit() {
@@ -1172,6 +1386,39 @@ public final class MainActivity extends AppCompatActivity {
                 0xFF74869D, false);
         mainThemeNote.setPadding(0, dp(3), 0, dp(2));
         parent.addView(mainThemeNote);
+    }
+
+    /** Enlarges controls on low-density automotive screens without affecting lyric typography. */
+    private void addSettingsUiScaleSelector(LinearLayout parent) {
+        TextView label = sectionLabel("设置界面缩放");
+        label.setPadding(0, dp(16), 0, dp(4));
+        parent.addView(label);
+        Spinner spinner = new Spinner(this, Spinner.MODE_DIALOG);
+        String[] labels = {"标准（100%）", "大号（150%）", "特大（200%）"};
+        int[] values = {100, 150, 200};
+        spinner.setPopupBackgroundDrawable(solid(0xFF132238, 14));
+        spinner.setAdapter(new ThemedSpinnerAdapter<>(this, labels));
+        int current = AppPreferences.settingsUiScale(this);
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] == current) {
+                spinner.setSelection(i, false);
+                break;
+            }
+        }
+        spinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parentView,
+                                                  View view, int position, long id) {
+                if (values[position] == AppPreferences.settingsUiScale(MainActivity.this)) return;
+                AppPreferences.setSettingsUiScale(MainActivity.this, values[position]);
+                recreate();
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parentView) { }
+        });
+        parent.addView(spinner, new LinearLayout.LayoutParams(-1, dp(52)));
+        TextView note = text("仅放大设置页面的文字与控件，不改变主屏、副屏或通知栏歌词字号。", 12,
+                0xFF74869D, false);
+        note.setPadding(0, dp(3), 0, dp(2));
+        parent.addView(note);
     }
 
     private void addDisplaySettingsLaunchers(LinearLayout parent) {

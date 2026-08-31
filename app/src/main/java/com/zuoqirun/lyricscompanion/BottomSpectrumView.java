@@ -15,6 +15,7 @@ final class BottomSpectrumView extends View {
             new SpectrumMath.BarTracker(SpectrumMath.BAND_COUNT);
     private final float[] virtual = new float[SpectrumMath.BAND_COUNT];
     private final float[] displayed = new float[SpectrumMath.BAND_COUNT];
+    private final RectF spectrumArea = new RectF();
     private final int[] palette = {0xFF6EE7F2, 0xFFFFCA66, 0xFFFF7E9D, 0xFF9B8CFF};
 
     BottomSpectrumView(Context context) {
@@ -33,14 +34,12 @@ final class BottomSpectrumView extends View {
         for (int index = 0; index < displayed.length; index++) displayed[index] = tracker.barAt(index);
 
         float density = getResources().getDisplayMetrics().density;
-        paint.setColor(0x3A07111F);
-        canvas.drawRect(0f, 0f, getWidth(), getHeight(), paint);
         float inset = Math.max(5f * density, getWidth() * 0.012f);
-        RectF area = new RectF(inset, Math.max(2f * density, getHeight() * 0.08f),
+        spectrumArea.set(inset, Math.max(2f * density, getHeight() * 0.08f),
                 getWidth() - inset, getHeight() - Math.max(2f * density, getHeight() * 0.06f));
         int lyricColor = AppPreferences.lyricColor(getContext(), false);
         if (lyricColor == 0) lyricColor = 0xFF6EE7F2;
-        SpectrumRenderer.draw(canvas, paint, area, displayed,
+        SpectrumRenderer.draw(canvas, paint, spectrumArea, displayed,
                 AppPreferences.spectrumStyle(getContext(), false),
                 AppPreferences.spectrumColorMode(getContext(), false), lyricColor,
                 AppPreferences.compactSpectrumColor(getContext(), false), palette);

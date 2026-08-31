@@ -162,10 +162,18 @@ final class MusicStateStore {
             long positionToStore = newPosition;
             long positionTimeToStore = reportedPositionTime > 0L
                     ? reportedPositionTime : now;
-            if (!changed && newPlaying && reportedPositionTime <= 0L
-                    && !reportedPositionChanged) {
+            boolean transientZeroPosition = !changed && estimatedPosition > 2_500L
+                    && lastReportedPositionMs > 2_500L && newPosition <= 1_000L
+                    // Navigation prompts on several head units briefly replace the session
+                    // with a state-only update at position zero. Keep the same track's clock
+                    // instead of restarting secondary-display lyrics from the first line.
+                    && (stateValue != MusicPlaybackData.STATE_STOPPED
+                    && stateValue != MusicPlaybackData.STATE_ERROR);
+            if (!changed && (transientZeroPosition || newPlaying && reportedPositionTime <= 0L
+                    && !reportedPositionChanged)) {
                 // Metadata-only automotive sessions commonly keep returning the same raw
-                // position. Preserve our monotonic estimate instead of resetting it every poll.
+                // position. Preserve our monotonic estimate instead of resetting it every poll
+                // or when a transient navigation session reports position zero.
                 positionToStore = Math.max(newPosition, estimatedPosition);
                 positionTimeToStore = now;
             }

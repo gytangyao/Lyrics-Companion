@@ -79,7 +79,7 @@
             android:layout_weight="1"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:text="首页"
+            android:text="总览"
             android:textAllCaps="false" />
 
         <com.google.android.material.button.MaterialButton
@@ -112,7 +112,7 @@
             android:layout_weight="1"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:text="系统"
+            android:text="高级"
             android:textAllCaps="false" />
     </LinearLayout>
 </LinearLayout>

@@ -62,10 +62,14 @@ final class LyricsPanelView extends View {
     private int currentLyricDarkColor;
     private int inactiveLyricLightColor;
     private int inactiveLyricDarkColor;
-    private boolean lyricOutline;
-    private int lyricOutlineColor;
-    private int lyricOutlineAlphaPercent = 88;
-    private int lyricOutlineWidthPercent = 8;
+    private boolean currentLyricOutline;
+    private int currentLyricOutlineColor;
+    private int currentLyricOutlineAlphaPercent = 88;
+    private int currentLyricOutlineWidthPercent = 8;
+    private boolean inactiveLyricOutline;
+    private int inactiveLyricOutlineColor;
+    private int inactiveLyricOutlineAlphaPercent = 88;
+    private int inactiveLyricOutlineWidthPercent = 8;
     private boolean trailingAccent;
     private int titleColor;
     private int artistColor;
@@ -145,6 +149,8 @@ final class LyricsPanelView extends View {
     private final SpectrumMath.BarTracker compactSpectrumBars =
             new SpectrumMath.BarTracker(SpectrumMath.BAND_COUNT);
     private final float[] compactVirtualSpectrum = new float[SpectrumMath.BAND_COUNT];
+    private final float[] compactDisplayedSpectrum = new float[SpectrumMath.BAND_COUNT];
+    private final RectF spectrumRect = new RectF();
     private boolean compactSpectrumAnimating;
     private final boolean fullscreen;
     private final boolean compactTextOnly;
@@ -200,11 +206,22 @@ final class LyricsPanelView extends View {
                 : AppPreferences.inactiveLyricLightColor(getContext(), secondary);
         inactiveLyricDarkColor = compactTextOnly ? 0
                 : AppPreferences.inactiveLyricDarkColor(getContext(), secondary);
-        lyricOutlineColor = compactTextOnly ? 0
-                : AppPreferences.lyricOutlineColor(getContext(), secondary);
-        lyricOutlineAlphaPercent = AppPreferences.lyricOutlineAlphaPercent(getContext(), secondary);
-        lyricOutlineWidthPercent = AppPreferences.lyricOutlineWidthPercent(getContext(), secondary);
-        lyricOutline = !compactTextOnly && AppPreferences.lyricOutline(getContext(), secondary);
+        currentLyricOutline = !compactTextOnly
+                && AppPreferences.lyricOutline(getContext(), secondary, true);
+        currentLyricOutlineColor = compactTextOnly ? 0
+                : AppPreferences.lyricOutlineColor(getContext(), secondary, true);
+        currentLyricOutlineAlphaPercent = AppPreferences.lyricOutlineAlphaPercent(getContext(),
+                secondary, true);
+        currentLyricOutlineWidthPercent = AppPreferences.lyricOutlineWidthPercent(getContext(),
+                secondary, true);
+        inactiveLyricOutline = !compactTextOnly
+                && AppPreferences.lyricOutline(getContext(), secondary, false);
+        inactiveLyricOutlineColor = compactTextOnly ? 0
+                : AppPreferences.lyricOutlineColor(getContext(), secondary, false);
+        inactiveLyricOutlineAlphaPercent = AppPreferences.lyricOutlineAlphaPercent(getContext(),
+                secondary, false);
+        inactiveLyricOutlineWidthPercent = AppPreferences.lyricOutlineWidthPercent(getContext(),
+                secondary, false);
         trailingAccent = AppPreferences.trailingAccent(getContext(), secondary);
         titleColor = AppPreferences.titleColor(getContext(), secondary);
         artistColor = AppPreferences.artistColor(getContext(), secondary);
@@ -1617,10 +1634,10 @@ final class LyricsPanelView extends View {
         } else {
             compactSpectrumBars.update(targets, now);
         }
-        float[] displayed = new float[count];
-        for (int i = 0; i < count; i++) displayed[i] = targets == null
+        for (int i = 0; i < count; i++) compactDisplayedSpectrum[i] = targets == null
                 ? 0.10f : compactSpectrumBars.barAt(i);
-        SpectrumRenderer.draw(canvas, paint, new RectF(left, top, right, top + height), displayed,
+        spectrumRect.set(left, top, right, top + height);
+        SpectrumRenderer.draw(canvas, paint, spectrumRect, compactDisplayedSpectrum,
                 AppPreferences.spectrumStyle(getContext(), secondary),
                 AppPreferences.spectrumColorMode(getContext(), secondary), color,
                 spectrumColor, palette);
@@ -1725,9 +1742,11 @@ final class LyricsPanelView extends View {
         float drawX = x - offset;
         drawLyricText(canvas, text, drawX, y, requestedSize, baseColor);
         if (!snapshot.lyricAvailable || snapshot.lyrics.lyric.isEmpty()) {
+            drawLyricOutline(canvas, text, drawX, y, requestedSize, activeColor, true);
             paint.setColor(activeColor);
             canvas.drawText(text, drawX, y, paint);
         } else if (!snapshot.lyrics.wordTimed) {
+            drawLyricOutline(canvas, text, drawX, y, requestedSize, activeColor, true);
             paint.setColor(activeColor);
             applyRefinedTextEffect(requestedSize, activeColor, 255);
             canvas.drawText(text, drawX, y, paint);
@@ -1738,6 +1757,7 @@ final class LyricsPanelView extends View {
             int highlightSave = canvas.save();
             canvas.clipRect(drawX, y - requestedSize * 1.25f,
                     drawX + Math.min(textWidth, highlightedWidth), y + requestedSize * 0.35f);
+            drawLyricOutline(canvas, text, drawX, y, requestedSize, activeColor, true);
             paint.setColor(activeColor);
             if (refinedLyricGlow) {
                 paint.setShadowLayer(Math.max(3f, requestedSize * 0.24f), 0f, 0f,
@@ -2063,8 +2083,9 @@ final class LyricsPanelView extends View {
         long now = SystemClock.elapsedRealtime();
         float[] targets = frame.live && useReal ? frame.levels : virtualSpectrum(snapshot, now);
         compactSpectrumBars.update(targets, now);
-        float[] displayed = new float[SpectrumMath.BAND_COUNT];
-        for (int i = 0; i < displayed.length; i++) displayed[i] = compactSpectrumBars.barAt(i);
+        for (int i = 0; i < compactDisplayedSpectrum.length; i++) {
+            compactDisplayedSpectrum[i] = compactSpectrumBars.barAt(i);
+        }
         float inset = Math.max(8f * density, getWidth() * 0.04f);
         float height = Math.max(14f * density, Math.min(42f * density, getHeight() * 0.15f));
         float bottom = getHeight() - Math.max(3f * density,
@@ -2072,8 +2093,8 @@ final class LyricsPanelView extends View {
                         && (AppPreferences.showPreviousButton(getContext())
                         || AppPreferences.showPlayPauseButton(getContext())
                         || AppPreferences.showNextButton(getContext())) ? 42f * density : 5f * density);
-        SpectrumRenderer.draw(canvas, paint,
-                new RectF(inset, bottom - height, getWidth() - inset, bottom), displayed,
+        spectrumRect.set(inset, bottom - height, getWidth() - inset, bottom);
+        SpectrumRenderer.draw(canvas, paint, spectrumRect, compactDisplayedSpectrum,
                 AppPreferences.spectrumStyle(getContext(), secondary),
                 AppPreferences.spectrumColorMode(getContext(), secondary), lyricColor(0xFFFFCA66),
                 AppPreferences.compactSpectrumColor(getContext(), secondary), palette);
@@ -2905,6 +2926,7 @@ final class LyricsPanelView extends View {
             int save = canvas.save();
             canvas.clipRect(x, baseline - size * 1.18f,
                     x + activeWidth, baseline + size * 0.30f);
+            drawLyricOutline(canvas, chunk.text, x, baseline, size, activeColor, true);
             paint.setColor(activeColor);
             if (!"refined".equals(overlayStyle) || refinedLyricGlow) {
                 paint.setShadowLayer(Math.max(3f, size * 0.24f), 0f, 0f,
@@ -2969,6 +2991,7 @@ final class LyricsPanelView extends View {
         int save = canvas.save();
         canvas.clipRect(x + startWidth - 1f, baseline - size * 1.45f,
                 x + endWidth + 1f, baseline + size * 0.38f);
+        drawLyricOutline(canvas, chunk.text, x, baseline - lift, size, color, true);
         paint.setColor(withAlpha(color, alpha));
         if (glow) {
             paint.setShadowLayer(Math.max(2f, size * 0.18f), 0f, -lift * 0.25f,
@@ -3063,6 +3086,7 @@ final class LyricsPanelView extends View {
 
         LrcTimeline.At at = snapshot.lyrics;
         if (!at.wordTimed) {
+            drawLyricOutline(canvas, text, anchorX, y, size, activeColor, true);
             paint.setColor(activeColor);
             if (usesRefinedVisualStyle()) {
                 applyRefinedTextEffect(size, activeColor, 255);
@@ -3075,6 +3099,7 @@ final class LyricsPanelView extends View {
         int save = canvas.save();
         canvas.clipRect(left, y - size * 1.25f,
                 left + Math.min(textWidth, highlightedWidth), y + size * 0.35f);
+        drawLyricOutline(canvas, text, anchorX, y, size, activeColor, true);
         paint.setColor(activeColor);
         boolean glow = !usesRefinedVisualStyle() || refinedLyricGlow;
         if (glow) {
@@ -3186,10 +3211,10 @@ final class LyricsPanelView extends View {
                 Paint.Align.CENTER, 255)) return;
         paint.setColor(resolveMetadataColor(value, color));
         int resolved = resolveMetadataColor(value, color);
-        if (shouldOutlineLyric(text)) {
+        if (shouldOutlineLyric(text, false)) {
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(outlineStrokeWidth(size, lyricOutlineWidthPercent));
-            paint.setColor(outlineStrokeColor(resolved));
+            paint.setStrokeWidth(outlineStrokeWidth(size, inactiveLyricOutlineWidthPercent));
+            paint.setColor(outlineStrokeColor(resolved, false));
             canvas.drawText(text, getWidth() / 2f, y, paint);
             paint.setStyle(Paint.Style.FILL);
         }
@@ -3206,10 +3231,10 @@ final class LyricsPanelView extends View {
         if (drawSplitSourceMetadata(canvas, value, x, y, maxWidth,
                 Paint.Align.LEFT, 255)) return;
         int resolved = resolveMetadataColor(value, color);
-        if (shouldOutlineLyric(value)) {
+        if (shouldOutlineLyric(value, false)) {
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(outlineStrokeWidth(size, lyricOutlineWidthPercent));
-            paint.setColor(outlineStrokeColor(resolved));
+            paint.setStrokeWidth(outlineStrokeWidth(size, inactiveLyricOutlineWidthPercent));
+            paint.setColor(outlineStrokeColor(resolved, false));
             canvas.drawText(ellipsize(value.replace('\n', ' '), maxWidth), x, y, paint);
             paint.setStyle(Paint.Style.FILL);
         }
@@ -3217,8 +3242,9 @@ final class LyricsPanelView extends View {
         canvas.drawText(ellipsize(value.replace('\n', ' '), maxWidth), x, y, paint);
     }
 
-    private boolean shouldOutlineLyric(String value) {
-        return lyricOutline && value != null && !value.equals(frameTitle) && !value.equals(frameArtist)
+    private boolean shouldOutlineLyric(String value, boolean current) {
+        return (current ? currentLyricOutline : inactiveLyricOutline)
+                && value != null && !value.equals(frameTitle) && !value.equals(frameArtist)
                 && !value.equals(frameSourceName) && !value.equals(frameLyricSourceName);
     }
 
@@ -3229,15 +3255,16 @@ final class LyricsPanelView extends View {
     }
 
     /** Auto outline color contrasts against the glyph so either environment stays readable. */
-    private int outlineStrokeColor(int textColor) {
-        int color = lyricOutlineColor;
+    private int outlineStrokeColor(int textColor, boolean current) {
+        int color = current ? currentLyricOutlineColor : inactiveLyricOutlineColor;
         if (color == 0) {
             double luminance = (0.299 * Color.red(textColor)
                     + 0.587 * Color.green(textColor) + 0.114 * Color.blue(textColor))
                     * (Color.alpha(textColor) / 255.0);
             color = luminance >= 128.0 ? 0xFF000000 : 0xFFFFFFFF;
         }
-        int alpha = Math.round(255f * Math.max(0, Math.min(100, lyricOutlineAlphaPercent)) / 100f);
+        int percent = current ? currentLyricOutlineAlphaPercent : inactiveLyricOutlineAlphaPercent;
+        int alpha = Math.round(255f * Math.max(0, Math.min(100, percent)) / 100f);
         return withAlpha(color | 0xFF000000, alpha);
     }
 
@@ -3247,15 +3274,20 @@ final class LyricsPanelView extends View {
      */
     private void drawLyricText(Canvas canvas, String text, float x, float y, float size,
                                int resolvedColor) {
-        if (shouldOutlineLyric(text)) {
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(outlineStrokeWidth(size, lyricOutlineWidthPercent));
-            paint.setColor(outlineStrokeColor(resolvedColor));
-            canvas.drawText(text, x, y, paint);
-            paint.setStyle(Paint.Style.FILL);
-        }
+        drawLyricOutline(canvas, text, x, y, size, resolvedColor, false);
         paint.setColor(resolvedColor);
         canvas.drawText(text, x, y, paint);
+    }
+
+    private void drawLyricOutline(Canvas canvas, String text, float x, float y, float size,
+                                  int resolvedColor, boolean current) {
+        if (!shouldOutlineLyric(text, current)) return;
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(outlineStrokeWidth(size, current
+                ? currentLyricOutlineWidthPercent : inactiveLyricOutlineWidthPercent));
+        paint.setColor(outlineStrokeColor(resolvedColor, current));
+        canvas.drawText(text, x, y, paint);
+        paint.setStyle(Paint.Style.FILL);
     }
 
     private float fitSize(String value, float requested, float maxWidth, int style) {

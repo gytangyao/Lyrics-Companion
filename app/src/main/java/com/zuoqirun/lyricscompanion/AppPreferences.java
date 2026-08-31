@@ -49,6 +49,14 @@ final class AppPreferences {
     static final String KEY_LYRIC_OUTLINE_COLOR = "lyric_outline_color";
     static final String KEY_LYRIC_OUTLINE_ALPHA = "lyric_outline_alpha";
     static final String KEY_LYRIC_OUTLINE_WIDTH = "lyric_outline_width";
+    static final String KEY_CURRENT_LYRIC_OUTLINE = "current_lyric_outline";
+    static final String KEY_CURRENT_LYRIC_OUTLINE_COLOR = "current_lyric_outline_color";
+    static final String KEY_CURRENT_LYRIC_OUTLINE_ALPHA = "current_lyric_outline_alpha";
+    static final String KEY_CURRENT_LYRIC_OUTLINE_WIDTH = "current_lyric_outline_width";
+    static final String KEY_INACTIVE_LYRIC_OUTLINE = "inactive_lyric_outline";
+    static final String KEY_INACTIVE_LYRIC_OUTLINE_COLOR = "inactive_lyric_outline_color";
+    static final String KEY_INACTIVE_LYRIC_OUTLINE_ALPHA = "inactive_lyric_outline_alpha";
+    static final String KEY_INACTIVE_LYRIC_OUTLINE_WIDTH = "inactive_lyric_outline_width";
     static final String KEY_TRAILING_ACCENT = "trailing_accent";
     static final String KEY_LYRIC_LIGHT_COLOR = "lyric_light_color";
     static final String KEY_LYRIC_DARK_COLOR = "lyric_dark_color";
@@ -114,6 +122,8 @@ final class AppPreferences {
             "hide_overlays_when_not_playing";
     static final String KEY_HIDE_OVERLAYS_IN_PLAYER = "hide_overlays_in_player";
     static final String KEY_HIDE_OVERLAYS_IN_APPS = "hide_overlays_in_apps";
+    static final String KEY_HIDE_SELECTED_APPS_ON_MAIN = "hide_selected_apps_on_main";
+    static final String KEY_HIDE_SELECTED_APPS_ON_SECONDARY = "hide_selected_apps_on_secondary";
     static final String KEY_SHOW_PREVIOUS_BUTTON = "show_previous_button";
     static final String KEY_SHOW_PLAY_PAUSE_BUTTON = "show_play_pause_button";
     static final String KEY_SHOW_NEXT_BUTTON = "show_next_button";
@@ -134,6 +144,9 @@ final class AppPreferences {
     static final String KEY_TOP_LYRIC_REGION_PERCENT = "top_lyric_region_percent";
     static final String KEY_TOP_LYRIC_OFFSET_X_DP = "top_lyric_offset_x_dp";
     static final String KEY_TOP_LYRIC_OFFSET_Y_DP = "top_lyric_offset_y_dp";
+    /** Settings-page scale; deliberately independent from lyric rendering scale. */
+    static final String KEY_SETTINGS_UI_SCALE = "settings_ui_scale";
+    static final String KEY_MAIN_SETTINGS_MODE = "main_settings_mode";
     static final String KEY_TOP_LYRIC_SHOW_TRANSLATION = "top_lyric_show_translation";
     static final String KEY_TOP_LYRIC_BACKGROUND = "top_lyric_background";
     static final String KEY_TOP_LYRIC_SPECTRUM = "top_lyric_spectrum";
@@ -477,6 +490,46 @@ final class AppPreferences {
 
     static boolean lyricOutline(Context context, boolean secondary) {
         return displayBoolean(context, secondary, KEY_LYRIC_OUTLINE, false);
+    }
+
+    static boolean lyricOutline(Context context, boolean secondary, boolean current) {
+        String key = current ? KEY_CURRENT_LYRIC_OUTLINE : KEY_INACTIVE_LYRIC_OUTLINE;
+        return displayBoolean(context, secondary, key, lyricOutline(context, secondary));
+    }
+
+    static int lyricOutlineColor(Context context, boolean secondary, boolean current) {
+        String key = current ? KEY_CURRENT_LYRIC_OUTLINE_COLOR : KEY_INACTIVE_LYRIC_OUTLINE_COLOR;
+        return displayInt(context, secondary, key, lyricOutlineColor(context, secondary));
+    }
+
+    static int lyricOutlineAlphaPercent(Context context, boolean secondary, boolean current) {
+        String key = current ? KEY_CURRENT_LYRIC_OUTLINE_ALPHA : KEY_INACTIVE_LYRIC_OUTLINE_ALPHA;
+        return displayInt(context, secondary, key, lyricOutlineAlphaPercent(context, secondary));
+    }
+
+    static int lyricOutlineWidthPercent(Context context, boolean secondary, boolean current) {
+        String key = current ? KEY_CURRENT_LYRIC_OUTLINE_WIDTH : KEY_INACTIVE_LYRIC_OUTLINE_WIDTH;
+        return displayInt(context, secondary, key, lyricOutlineWidthPercent(context, secondary));
+    }
+
+    static void setLyricOutlineColor(Context context, boolean secondary, boolean current, int color) {
+        putDisplayInt(context, secondary,
+                current ? KEY_CURRENT_LYRIC_OUTLINE_COLOR : KEY_INACTIVE_LYRIC_OUTLINE_COLOR,
+                color == 0 ? 0 : color | 0xFF000000);
+    }
+
+    static void setLyricOutlineAlphaPercent(Context context, boolean secondary, boolean current,
+                                            int percent) {
+        putDisplayInt(context, secondary,
+                current ? KEY_CURRENT_LYRIC_OUTLINE_ALPHA : KEY_INACTIVE_LYRIC_OUTLINE_ALPHA,
+                Math.max(0, Math.min(100, percent)));
+    }
+
+    static void setLyricOutlineWidthPercent(Context context, boolean secondary, boolean current,
+                                            int percent) {
+        putDisplayInt(context, secondary,
+                current ? KEY_CURRENT_LYRIC_OUTLINE_WIDTH : KEY_INACTIVE_LYRIC_OUTLINE_WIDTH,
+                Math.max(1, Math.min(40, percent)));
     }
 
     static boolean trailingAccent(Context context, boolean secondary) {
@@ -977,6 +1030,27 @@ final class AppPreferences {
         return displayBoolean(context, secondary, KEY_OVERLAY_POSITION_LOCKED, false);
     }
 
+    /**
+     * Positions are style-scoped as well as display-scoped. A 16:9 PIP card and a wide AMLL
+     * panel cannot share a useful top-left coordinate, which was the source of the visible jump
+     * when switching modes. Legacy per-display positions remain the first-run fallback.
+     */
+    static String overlayPositionKey(boolean secondary, String style, boolean horizontal) {
+        String safeStyle = style == null || style.trim().isEmpty() ? "classic" : style.trim();
+        return (secondary ? "secondary" : "main") + "_" + safeStyle + "_"
+                + (horizontal ? "x" : "y");
+    }
+
+    static int overlayPosition(Context context, boolean secondary, String style,
+                               boolean horizontal, int fallback) {
+        SharedPreferences preferences = get(context);
+        String scoped = overlayPositionKey(secondary, style, horizontal);
+        if (preferences.contains(scoped)) return preferences.getInt(scoped, fallback);
+        String legacy = secondary ? (horizontal ? KEY_SECONDARY_X : KEY_SECONDARY_Y)
+                : (horizontal ? KEY_MAIN_X : KEY_MAIN_Y);
+        return preferences.getInt(legacy, fallback);
+    }
+
     static boolean hideOverlaysWhenNotPlaying(Context context) {
         return get(context).getBoolean(KEY_HIDE_OVERLAYS_WHEN_NOT_PLAYING, false);
     }
@@ -994,6 +1068,14 @@ final class AppPreferences {
     static void setHiddenOverlayApps(Context context, Set<String> packages) {
         get(context).edit().putStringSet(KEY_HIDE_OVERLAYS_IN_APPS,
                 packages == null ? Collections.emptySet() : new HashSet<>(packages)).apply();
+    }
+
+    static boolean hideSelectedAppsOnMain(Context context) {
+        return get(context).getBoolean(KEY_HIDE_SELECTED_APPS_ON_MAIN, true);
+    }
+
+    static boolean hideSelectedAppsOnSecondary(Context context) {
+        return get(context).getBoolean(KEY_HIDE_SELECTED_APPS_ON_SECONDARY, true);
     }
 
     static boolean notificationLyrics(Context context) {
@@ -1050,8 +1132,35 @@ final class AppPreferences {
     }
 
     static int topLyricOffsetXDp(Context context) {
-        return Math.max(-240, Math.min(240,
+        int maximum = topLyricMaxOffsetDp(context);
+        return Math.max(-maximum, Math.min(maximum,
                 get(context).getInt(KEY_TOP_LYRIC_OFFSET_X_DP, 0)));
+    }
+
+    /** The horizontal adjustment follows the actual display instead of a fixed dp cap. */
+    static int topLyricMaxOffsetDp(Context context) {
+        android.util.DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        float density = Math.max(0.1f, metrics.density);
+        return Math.max(240, Math.round(metrics.widthPixels / density));
+    }
+
+    static int settingsUiScale(Context context) {
+        int value = get(context).getInt(KEY_SETTINGS_UI_SCALE, 100);
+        return value == 150 || value == 200 ? value : 100;
+    }
+
+    static void setSettingsUiScale(Context context, int percent) {
+        int safe = percent == 150 || percent == 200 ? percent : 100;
+        get(context).edit().putInt(KEY_SETTINGS_UI_SCALE, safe).apply();
+    }
+
+    static boolean conciseSettingsMode(Context context) {
+        return "concise".equals(get(context).getString(KEY_MAIN_SETTINGS_MODE, "concise"));
+    }
+
+    static void setConciseSettingsMode(Context context, boolean concise) {
+        get(context).edit().putString(KEY_MAIN_SETTINGS_MODE,
+                concise ? "concise" : "complete").apply();
     }
 
     static int topLyricOffsetYDp(Context context) {
