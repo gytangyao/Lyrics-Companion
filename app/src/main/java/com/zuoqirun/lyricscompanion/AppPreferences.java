@@ -604,7 +604,7 @@ final class AppPreferences {
     /** Resolves a player-specific rule first, then retains the existing global default. */
     static String lyricCatalog(Context context, String sourceId) {
         String override = get(context).getString(playerLyricCatalogKey(sourceId), "");
-        return resolveLyricCatalog(override, lyricCatalog(context));
+        return resolvePlayerLyricCatalog(sourceId, override, lyricCatalog(context));
     }
 
     /**
@@ -613,7 +613,11 @@ final class AppPreferences {
      */
     static String lyricCatalog(Context context, String sourceId, String packageName) {
         String override = get(context).getString(playerPackageLyricCatalogKey(packageName), "");
-        return resolveLyricCatalog(override, lyricCatalog(context));
+        return resolvePlayerLyricCatalog(sourceId, override, lyricCatalog(context));
+    }
+
+    static String resolvePlayerLyricCatalog(String sourceId, String override, String fallback) {
+        return resolveLyricCatalog(override, "kuwo".equals(sourceId) ? "kuwo" : fallback);
     }
 
     static String resolveLyricCatalog(String playerOverride, String fallback) {

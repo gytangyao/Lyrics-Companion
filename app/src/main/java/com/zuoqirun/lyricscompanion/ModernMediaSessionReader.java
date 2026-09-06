@@ -12,6 +12,7 @@ import android.media.session.MediaSession;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.os.Handler;
+import android.os.Bundle;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -26,6 +27,7 @@ final class ModernMediaSessionReader implements MusicSessionReader {
     private final Handler handler;
     private final Callback callback;
     private final Map<MediaSession.Token, MediaController> observedControllers = new HashMap<>();
+    private final Map<MediaSession.Token, KuwoSessionLyrics> kuwoLyrics = new HashMap<>();
     private MediaSessionManager sessionManager;
     private MediaController selectedController;
 
@@ -35,6 +37,7 @@ final class ModernMediaSessionReader implements MusicSessionReader {
         @Override public void onMetadataChanged(MediaMetadata metadata) { refresh(); }
         @Override public void onPlaybackStateChanged(PlaybackState state) { refresh(); }
         @Override public void onSessionDestroyed() { refresh(); }
+        @Override public void onExtrasChanged(Bundle extras) { refresh(); }
     };
 
     ModernMediaSessionReader(Context context, ComponentName listenerComponent, Handler handler,
@@ -111,6 +114,7 @@ final class ModernMediaSessionReader implements MusicSessionReader {
             catch (Throwable ignored) { }
         }
         observedControllers.clear();
+        kuwoLyrics.clear();
         selectedController = null;
         sessionManager = null;
     }
@@ -144,7 +148,7 @@ final class ModernMediaSessionReader implements MusicSessionReader {
             return;
         }
         callback.onSession(best.getPackageName(), applicationLabel(best.getPackageName()),
-                playbackData(best.getMetadata(), best.getPlaybackState()));
+                playbackData(best, best.getMetadata(), best.getPlaybackState()));
     }
 
     private void syncObservedSessions(List<MediaController> sessions) {
@@ -170,9 +174,11 @@ final class ModernMediaSessionReader implements MusicSessionReader {
         }
         observedControllers.clear();
         observedControllers.putAll(next);
+        kuwoLyrics.keySet().retainAll(next.keySet());
     }
 
-    private MusicPlaybackData playbackData(MediaMetadata metadata, PlaybackState state) {
+    private MusicPlaybackData playbackData(MediaController controller, MediaMetadata metadata,
+                                           PlaybackState state) {
         String title = firstNonEmpty(metadata,
                 MediaMetadata.METADATA_KEY_TITLE, MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
         String artist = firstNonEmpty(metadata,
@@ -186,12 +192,26 @@ final class ModernMediaSessionReader implements MusicSessionReader {
         String mediaUri = firstNonEmpty(metadata, MediaMetadata.METADATA_KEY_MEDIA_URI);
         long duration = metadata == null ? -1L
                 : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+        LrcTimeline sessionTimeline = LrcTimeline.EMPTY;
+        if ("cn.kuwo.kwmusiccar".equals(controller.getPackageName())) {
+            KuwoSessionLyrics reader = kuwoLyrics.get(controller.getSessionToken());
+            if (reader == null) {
+                reader = new KuwoSessionLyrics();
+                kuwoLyrics.put(controller.getSessionToken(), reader);
+            }
+            String raw = "";
+            try {
+                Bundle extras = controller.getExtras();
+                if (extras != null) raw = extras.getString("AUDIO_LYRIC", "");
+            } catch (RuntimeException ignored) { }
+            sessionTimeline = reader.read(mediaId, title, artist, raw);
+        }
         return new MusicPlaybackData(mediaId, title, artist, art, artUri, mediaUri, duration,
                 state != null,
                 state == null ? MusicPlaybackData.STATE_NONE : state.getState(),
                 state == null ? 0L : Math.max(0L, state.getPosition()),
                 state == null ? 0L : state.getLastPositionUpdateTime(),
-                state == null ? 0f : state.getPlaybackSpeed());
+                state == null ? 0f : state.getPlaybackSpeed(), false, "", sessionTimeline);
     }
 
     private String applicationLabel(String packageName) {

@@ -31,6 +31,7 @@ final class MusicPlaybackData {
     final float speed;
     final boolean sessionLyricPresent;
     final String sessionLyric;
+    final LrcTimeline sessionTimeline;
 
     MusicPlaybackData(String mediaId, String title, String artist, Bitmap albumArt,
                       String albumArtUri, long durationMs, boolean statePresent, int state,
@@ -52,6 +53,16 @@ final class MusicPlaybackData {
                       boolean statePresent, int state, long positionMs,
                       long positionUpdatedAtElapsedMs, float speed,
                       boolean sessionLyricPresent, String sessionLyric) {
+        this(mediaId, title, artist, albumArt, albumArtUri, mediaUri, durationMs,
+                statePresent, state, positionMs, positionUpdatedAtElapsedMs, speed,
+                sessionLyricPresent, sessionLyric, LrcTimeline.EMPTY);
+    }
+
+    MusicPlaybackData(String mediaId, String title, String artist, Bitmap albumArt,
+                      String albumArtUri, String mediaUri, long durationMs,
+                      boolean statePresent, int state, long positionMs,
+                      long positionUpdatedAtElapsedMs, float speed,
+                      boolean sessionLyricPresent, String sessionLyric, LrcTimeline sessionTimeline) {
         this.mediaId = value(mediaId);
         this.title = value(title);
         this.artist = value(artist);
@@ -66,6 +77,7 @@ final class MusicPlaybackData {
         this.speed = speed;
         this.sessionLyricPresent = sessionLyricPresent;
         this.sessionLyric = value(sessionLyric);
+        this.sessionTimeline = sessionTimeline == null ? LrcTimeline.EMPTY : sessionTimeline;
     }
 
     private static String value(String value) {

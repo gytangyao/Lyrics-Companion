@@ -29,6 +29,8 @@
         <package android:name="com.kugou.android.auto" />
         <package android:name="com.kugou.android.lite" />
         <package android:name="cn.kuwo.player" />
+        <package android:name="cn.kuwo.kwmusiccar" />
+        <package android:name="cn.kuwo.autolite" />
         <package android:name="com.shaiban.audioplayer.mplayer" />
         <package android:name="com.spotify.music" />
         <package android:name="com.luna.music" />

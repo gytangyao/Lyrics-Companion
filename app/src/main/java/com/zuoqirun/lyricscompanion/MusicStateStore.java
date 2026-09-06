@@ -44,6 +44,8 @@ final class MusicStateStore {
     private static String liveSessionLyric = "";
     private static boolean netEaseAutoScrollUnsupported;
     private static Future<?> lyricLoadTask;
+    private static boolean usingSessionTimeline;
+    private static boolean sessionTimelineAllowed = true;
 
     private MusicStateStore() {}
 
@@ -149,7 +151,8 @@ final class MusicStateStore {
             boolean newActive = isDisplayableSession(newTitle, stateValue);
             String newTrackKey = lyricTrackKey(normalizedSource, newTitle, newArtist,
                     newDuration, newMediaId, selectedCatalog, playerCatalogFallback);
-            boolean changed = !TextUtils.equals(trackKey, newTrackKey);
+            boolean changed = !TextUtils.equals(trackKey, newTrackKey)
+                    || !TextUtils.equals(sourcePackage, normalizedSourcePackage);
             long now = SystemClock.elapsedRealtime();
             long estimatedPosition = currentPositionLocked();
             boolean reportedPositionChanged = !changed
@@ -203,6 +206,8 @@ final class MusicStateStore {
             boolean wasNetEaseUnsupported = netEaseAutoScrollUnsupported;
             if (changed) {
                 trackKey = newTrackKey;
+                usingSessionTimeline = false;
+                sessionTimelineAllowed = true;
                 timeline = LrcTimeline.EMPTY;
                 lyricLoadFinished = false;
                 lyricSourceName = "";
@@ -236,6 +241,22 @@ final class MusicStateStore {
             } else if (!netEaseUnsupported && usesLiveTitleMetadata(normalizedSource)
                     && !TextUtils.isEmpty(incomingLiveSessionLyric)) {
                 liveSessionLyric = incomingLiveSessionLyric.trim();
+            }
+            if (sessionTimelineAllowed && "kuwo".equals(normalizedSource)
+                    && (selectedCatalog.isEmpty() || "auto".equals(selectedCatalog)
+                    || "kuwo".equals(selectedCatalog)) && !data.sessionTimeline.isEmpty()) {
+                if (timeline != data.sessionTimeline) {
+                    timeline = data.sessionTimeline;
+                    lyricSourceName = "酷我播放器歌词";
+                    lyricLoadFinished = true;
+                    usingSessionTimeline = true;
+                    DiagnosticLog.record(context, "Kuwo", "session lines=" + timeline.lineCount());
+                }
+                // Still let the worker check user-provided local LRC first.
+                if (!AppPreferences.localLyricEnabled(context)) {
+                    cancelLyricLoadLocked();
+                    generationToLoad = -1L;
+                }
             }
             if (changed || playbackModeChanged) {
                 Log.i(TAG, "Position sync state=" + stateValue + " advancing=" + newPlaying
@@ -305,6 +326,8 @@ final class MusicStateStore {
             liveSessionLyric = "";
             netEaseAutoScrollUnsupported = false;
             trackGeneration++;
+            usingSessionTimeline = false;
+            sessionTimelineAllowed = true;
             cancelLyricLoadLocked();
         }
         if (appContext != null) AudioSpectrumSource.setPlaybackActive(appContext, false);
@@ -384,18 +407,24 @@ final class MusicStateStore {
             forcedPlayerCatalog = selectedCatalogOverride == null
                     && AppPreferences.hasForcedPlayerPackageCatalog(context, sourcePackage);
             requestedMediaId = mediaId;
+            if ("kuwo".equals(requestedSource)
+                    && (!TextUtils.isEmpty(overrideTitle) || overrideArtist != null)) {
+                requestedMediaId = "";
+            }
             requestedMediaUri = mediaUri;
             requestedTitle = TextUtils.isEmpty(overrideTitle) ? title : overrideTitle.trim();
             requestedArtist = overrideArtist == null ? artist : overrideArtist.trim();
             requestedDuration = durationMs;
             trackKey = lyricTrackKey(requestedSource, title, artist,
-                    requestedDuration, requestedMediaId, selectedCatalog,
+                    requestedDuration, mediaId, selectedCatalog,
                     playerCatalogFallback);
             timeline = LrcTimeline.EMPTY;
             lyricLoadFinished = false;
             lyricSourceName = "";
             liveSessionLyric = "";
             netEaseAutoScrollUnsupported = false;
+            usingSessionTimeline = false;
+            sessionTimelineAllowed = false;
             generation = ++trackGeneration;
             cancelLyricLoadLocked();
         }
@@ -463,9 +492,15 @@ final class MusicStateStore {
                     MultiSourceLyricClient.Result result = lyricClient.load(requestedSource,
                             selectedCatalog, playerCatalogFallback, forcedPlayerCatalog,
                             requestedSourcePackage, requestedMediaId, requestedMediaUri,
-                            requestedTitle, requestedArtist, requestedDuration);
+                            requestedTitle, requestedArtist, requestedDuration, () -> {
+                                synchronized (LOCK) {
+                                    return generation == trackGeneration && usingSessionTimeline
+                                            ? timeline : LrcTimeline.EMPTY;
+                                }
+                            });
                     synchronized (LOCK) {
-                        if (generation != trackGeneration) {
+                        if (generation != trackGeneration || usingSessionTimeline
+                                && !"local".equals(result.providerId)) {
                             DiagnosticLog.record(appContext, "Lyrics", "load result discarded generation="
                                     + generation + " currentGeneration=" + trackGeneration);
                             return;
@@ -473,6 +508,10 @@ final class MusicStateStore {
                         timeline = result.timeline;
                         lyricSourceName = result.sourceName;
                         lyricLoadFinished = true;
+                        if ("local".equals(result.providerId)) {
+                            usingSessionTimeline = false;
+                            sessionTimelineAllowed = false;
+                        }
                     }
                     DiagnosticLog.record(appContext, "Lyrics", "load task finished generation="
                             + generation + " provider=" + result.providerId + " lines="
@@ -575,9 +614,11 @@ final class MusicStateStore {
             if (songId > 0L) directMediaId = Long.toString(songId);
         } else if ("soda".equals(source)) {
             directMediaId = SodaLyricClient.trackId(mediaId);
+        } else if ("kuwo".equals(source)) {
+            directMediaId = KuwoLyricParser.trackId(mediaId);
         }
-        // Duration and opaque media IDs often arrive late or oscillate on car players. Soda's
-        // numeric track ID is the catalog ID used by its lyric endpoint, so it is stable enough
+        // Duration and opaque media IDs often arrive late or oscillate on car players. Soda/Kuwo's
+        // numeric track ID is the catalog ID used by their lyric endpoints, so it is stable enough
         // to distinguish consecutive songs even when title/artist metadata arrives in stages.
         return safe(source) + "\n" + identityText(title) + "\n" + identityText(artist)
                 + "\n" + directMediaId + "\n" + safe(selectedCatalog)

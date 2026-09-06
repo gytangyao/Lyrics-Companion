@@ -61,6 +61,10 @@ public class MusicAppRegistryTest {
     }
 
     @Test public void onlyTrustsDirectMediaIdsFromMatchingNativeCatalogs() {
+        assertSource("kuwo", "cn.kuwo.autolite", "");
+        assertEquals("228908", MultiSourceLyricClient.directMediaId("kuwo", "kuwo", "228908"));
+        assertEquals("", MultiSourceLyricClient.directMediaId("kuwo", "netease", "228908"));
+        assertEquals("", MultiSourceLyricClient.directMediaId("netease", "kuwo", "228908"));
         assertEquals("123456", MultiSourceLyricClient.directMediaId(
                 "netease", "netease", "123456"));
         assertEquals("7031318019544614913", MultiSourceLyricClient.directMediaId(
@@ -84,6 +88,16 @@ public class MusicAppRegistryTest {
                 Arrays.asList(), Arrays.asList(qq, netease)).providerId);
         assertEquals("netease", MultiSourceLyricClient.chooseResult(
                 Arrays.asList("netease"), Arrays.asList(qq, netease)).providerId);
+    }
+
+    @Test public void kuwoNamesAndBothCarPackagesDefaultToKuwoCatalog() {
+        assertSource("kuwo", "cn.kuwo.kwmusiccar", "");
+        assertSource("kuwo", "cn.kuwo.autolite", "");
+        assertSource("kuwo", "vendor.qq.player", "车载酷我音乐");
+        assertSource("kuwo", "com.netease.cloudmusic", "酷我定制版");
+        assertEquals("kuwo", AppPreferences.resolvePlayerLyricCatalog("kuwo", "", "netease"));
+        assertEquals("qqmusic", AppPreferences.resolvePlayerLyricCatalog("kuwo", "qqmusic", "auto"));
+        assertEquals("netease", AppPreferences.resolvePlayerLyricCatalog("media", "", "netease"));
     }
 
     @Test public void ximalayaAndDftcRemainCrossCatalogSources() {
@@ -304,6 +318,17 @@ public class MusicAppRegistryTest {
         String direct = MusicStateStore.lyricTrackKey("netease", "夜曲", "周杰伦",
                 226_000L, "song:123456", "auto", true);
         assertFalse(first.equals(direct));
+    }
+
+    @Test public void kuwoRidChangeDistinguishesVersionsOfTheSameSong() {
+        String first = MusicStateStore.lyricTrackKey("kuwo", "晴天", "周杰伦",
+                269000L, "228908", "auto", true);
+        String same = MusicStateStore.lyricTrackKey("kuwo", "晴天", "周杰伦",
+                270000L, "MUSIC_228908", "auto", true);
+        String another = MusicStateStore.lyricTrackKey("kuwo", "晴天", "周杰伦",
+                269000L, "51685512", "auto", true);
+        assertEquals(first, same);
+        assertFalse(first.equals(another));
     }
 
     @Test public void netEaseUnsupportedAutoScrollStatusIsNeverUsedAsALyricLine() {

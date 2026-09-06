@@ -14,6 +14,7 @@ final class MusicAppRegistry {
             new App("kugou", "酷狗音乐", "com.kugou.auto"),
             new App("kuwo", "酷我音乐", "cn.kuwo.player"),
             new App("kuwo", "酷我音乐", "cn.kuwo.kwmusiccar"),
+            new App("kuwo", "酷我音乐极简版", "cn.kuwo.autolite"),
             new App("kuwo", "酷我音乐", "cn.kuwo.kwmusic"),
             new App("kuwo", "酷我音乐", "cn.kuwo.car"),
             new App("kuwo", "酷我音乐", "com.shaiban.audioplayer.mplayer"),
@@ -39,6 +40,10 @@ final class MusicAppRegistry {
 
     static App resolve(String packageName, String applicationLabel) {
         String normalizedPackage = safe(packageName).toLowerCase(Locale.ROOT);
+        // The visible application name is authoritative for renamed automotive builds.
+        if (safe(applicationLabel).contains("酷我")) {
+            return new App("kuwo", "酷我音乐", normalizedPackage);
+        }
         for (App app : KNOWN_APPS) {
             if (normalizedPackage.equals(app.packagePrefix)) return app;
         }

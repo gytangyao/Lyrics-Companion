@@ -24,6 +24,13 @@ final class LrcTimeline {
         this.lines = lines;
     }
 
+    static LrcTimeline fromTimedLines(List<Line> input) {
+        if (input.isEmpty()) return EMPTY;
+        TreeMap<Long, Line> ordered = new TreeMap<>();
+        for (Line line : input) ordered.put(line.timeMs, line);
+        return new LrcTimeline(Collections.unmodifiableList(new ArrayList<>(ordered.values())));
+    }
+
     static LrcTimeline parse(String original, String translated) {
         return parse(original, translated, "");
     }
@@ -395,12 +402,16 @@ final class LrcTimeline {
                 ? best.getValue() : "";
     }
 
-    private static final class Line {
+    static final class Line {
         final long timeMs;
         final long durationMs;
         final String text;
         final String translated;
         final List<Word> words;
+
+        Line(long timeMs, long durationMs, String text) {
+            this(timeMs, durationMs, text, "", Collections.emptyList());
+        }
 
         Line(long timeMs, long durationMs, String text, String translated, List<Word> words) {
             this.timeMs = timeMs;

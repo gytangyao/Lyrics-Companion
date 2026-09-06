@@ -33,6 +33,16 @@ final class MultiSourceLyricClient {
                 boolean forceSelectedCatalog,
                 String sourcePackage, String mediaId, String mediaUri, String title, String artist,
                 long durationMs) throws Exception {
+        return load(currentSource, selectedCatalog, playerCatalogFallback, forceSelectedCatalog,
+                sourcePackage, mediaId, mediaUri, title, artist, durationMs, () -> LrcTimeline.EMPTY);
+    }
+
+    interface SessionTimeline { LrcTimeline current(); }
+
+    Result load(String currentSource, String selectedCatalog, boolean playerCatalogFallback,
+                boolean forceSelectedCatalog,
+                String sourcePackage, String mediaId, String mediaUri, String title, String artist,
+                long durationMs, SessionTimeline sessionTimeline) throws Exception {
         if (AppPreferences.localLyricEnabled(appContext)) {
             LrcTimeline localTimeline = local.load(mediaUri, title, artist);
             if (!localTimeline.isEmpty()) {
@@ -61,6 +71,10 @@ final class MultiSourceLyricClient {
             }
             for (String provider : plan.providers) {
                 if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
+                if ("kuwo".equals(provider)) {
+                    LrcTimeline session = sessionTimeline.current();
+                    if (!session.isEmpty()) return new Result(session, "酷我播放器歌词", "kuwo_session");
+                }
                 Log.i(TAG, "Trying catalog " + provider + ": "
                         + query.title + " / " + query.artist);
                 String providerMediaId = queryIndex == 0
@@ -94,7 +108,7 @@ final class MultiSourceLyricClient {
                     label = "酷狗音乐";
                     break;
                 case "kuwo":
-                    timeline = kuwo.load(title, artist, durationMs);
+                    timeline = kuwo.load(mediaId, title, artist, durationMs);
                     label = "酷我音乐";
                     break;
                 case "soda":
@@ -169,7 +183,8 @@ final class MultiSourceLyricClient {
 
     static String directMediaId(String currentSource, String provider, String mediaId) {
         return currentSource != null && currentSource.equals(provider)
-                && ("netease".equals(provider) || "soda".equals(provider)) ? mediaId : "";
+                && ("netease".equals(provider) || "soda".equals(provider)
+                || "kuwo".equals(provider)) ? mediaId : "";
     }
 
     static Result chooseResult(List<String> priority, List<Result> successful) {
