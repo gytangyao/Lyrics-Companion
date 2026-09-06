@@ -18,6 +18,49 @@ final class LrcTimeline {
     private static final Pattern YRC_WORD = Pattern.compile("\\((\\d+),(\\d+),\\d+\\)");
     static final LrcTimeline EMPTY = new LrcTimeline(Collections.emptyList());
 
+    /** Lossless cache format: includes translations and every word's timing. */
+    byte[] toCacheBytes() throws java.io.IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+        out.writeInt(1);
+        out.writeInt(lines.size());
+        for (Line line : lines) {
+            out.writeLong(line.timeMs); out.writeLong(line.durationMs);
+            out.writeUTF(line.text); out.writeUTF(line.translated);
+            out.writeInt(line.words.size());
+            for (Word word : line.words) {
+                out.writeLong(word.startMs); out.writeLong(word.durationMs); out.writeUTF(word.text);
+            }
+        }
+        out.flush();
+        return bytes.toByteArray();
+    }
+
+    static LrcTimeline fromCacheBytes(byte[] bytes) throws java.io.IOException {
+        if (bytes.length > 2_000_000) throw new java.io.IOException("Cache too large");
+        java.io.DataInputStream in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(bytes));
+        if (in.readInt() != 1) throw new java.io.IOException("Unknown cache version");
+        int count = in.readInt();
+        if (count < 1 || count > 20_000) throw new java.io.IOException("Invalid line count");
+        List<Line> result = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            long time = in.readLong(), duration = in.readLong();
+            String text = in.readUTF(), translation = in.readUTF();
+            int wordCount = in.readInt();
+            if (time < 0 || duration < 0 || wordCount < 0 || wordCount > 20_000)
+                throw new java.io.IOException("Invalid cached line");
+            List<Word> words = new ArrayList<>();
+            for (int w = 0; w < wordCount; w++) {
+                long start = in.readLong(), length = in.readLong();
+                if (start < 0 || length < 0) throw new java.io.IOException("Invalid cached word");
+                words.add(new Word(start, length, in.readUTF()));
+            }
+            result.add(new Line(time, duration, text, translation, Collections.unmodifiableList(words)));
+        }
+        if (in.available() != 0) throw new java.io.IOException("Trailing cache data");
+        return fromTimedLines(result);
+    }
+
     private final List<Line> lines;
 
     private LrcTimeline(List<Line> lines) {

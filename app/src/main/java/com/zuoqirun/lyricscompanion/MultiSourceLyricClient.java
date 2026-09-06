@@ -43,6 +43,14 @@ final class MultiSourceLyricClient {
                 boolean forceSelectedCatalog,
                 String sourcePackage, String mediaId, String mediaUri, String title, String artist,
                 long durationMs, SessionTimeline sessionTimeline) throws Exception {
+        return load(currentSource, selectedCatalog, playerCatalogFallback, forceSelectedCatalog,
+                sourcePackage, mediaId, mediaUri, title, artist, durationMs, sessionTimeline, false);
+    }
+
+    Result load(String currentSource, String selectedCatalog, boolean playerCatalogFallback,
+                boolean forceSelectedCatalog, String sourcePackage, String mediaId, String mediaUri,
+                String title, String artist, long durationMs, SessionTimeline sessionTimeline,
+                boolean bypassMatchedCache) throws Exception {
         if (AppPreferences.localLyricEnabled(appContext)) {
             LrcTimeline localTimeline = local.load(mediaUri, title, artist);
             if (!localTimeline.isEmpty()) {
@@ -63,6 +71,17 @@ final class MultiSourceLyricClient {
         List<LocalTrackQueryRules.Query> queries = new ArrayList<>();
         queries.add(new LocalTrackQueryRules.Query(title, artist));
         queries.addAll(LocalTrackQueryRules.fallbackQueries(currentSource, title, artist));
+        MatchedLyricCache matchedCache = new MatchedLyricCache(appContext);
+        // Read all allowed local results before issuing even the first catalog search.
+        for (String provider : bypassMatchedCache ? java.util.Collections.<String>emptyList() : plan.providers) {
+            String key = MatchedLyricCache.key(provider, title, artist, durationMs,
+                    directMediaId(currentSource, provider, mediaId), sourcePackage);
+            LrcTimeline cached = matchedCache.read(key);
+            if (!cached.isEmpty()) {
+                DiagnosticLog.record(appContext, "Lyrics", "matched cache hit provider=" + provider);
+                return new Result(cached, "本地缓存 · " + providerLabel(provider), provider);
+            }
+        }
         for (int queryIndex = 0; queryIndex < queries.size(); queryIndex++) {
             LocalTrackQueryRules.Query query = queries.get(queryIndex);
             if (queryIndex > 0) {
@@ -81,11 +100,27 @@ final class MultiSourceLyricClient {
                         ? directMediaId(currentSource, provider, mediaId) : "";
                 Result result = tryProvider(provider, sourcePackage, providerMediaId,
                         query.title, query.artist, durationMs);
-                if (!result.timeline.isEmpty()) return result;
+                if (!result.timeline.isEmpty()) {
+                    if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
+                    matchedCache.write(MatchedLyricCache.key(provider, title, artist, durationMs,
+                            directMediaId(currentSource, provider, mediaId), sourcePackage), result.timeline);
+                    return result;
+                }
                 Log.i(TAG, "No lyric in catalog " + provider + ": " + query.title);
             }
         }
         return Result.EMPTY;
+    }
+
+    private static String providerLabel(String provider) {
+        switch (provider) {
+            case "netease": return "网易云音乐";
+            case "qqmusic": return "QQ 音乐";
+            case "kugou": return "酷狗音乐";
+            case "kuwo": return "酷我音乐";
+            case "soda": return "汽水音乐";
+            default: return provider;
+        }
     }
 
     private Result tryProvider(String provider, String sourcePackage, String mediaId,

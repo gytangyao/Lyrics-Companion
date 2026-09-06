@@ -4,6 +4,12 @@ import java.util.Locale;
 
 final class MusicAppRegistry {
     private static final App[] KNOWN_APPS = {
+            new App("media", "系统音乐", "com.android.music"),
+            new App("media", "Samsung Music", "com.sec.android.app.music"),
+            new App("media", "VLC", "org.videolan.vlc"),
+            new App("media", "Poweramp", "com.maxmpz.audioplayer"),
+            new App("media", "Musicolet", "in.krosbits.musicolet"),
+            new App("media", "AIMP", "com.aimp.player"),
             new App("netease", "网易云音乐", "com.netease.cloudmusic"),
             new App("netease", "网易云音乐车机版", "com.netease.cloudmusic.iot"),
             new App("qqmusic", "QQ 音乐", "com.tencent.qqmusic"),

@@ -1206,7 +1206,7 @@ final class AppPreferences {
     }
 
     static String lyricCachePolicy(Context context) {
-        String value = get(context).getString(KEY_LYRIC_CACHE_POLICY, "30d");
+        String value = get(context).getString(KEY_LYRIC_CACHE_POLICY, "capacity");
         return "forever".equals(value) || "capacity".equals(value) ? value : "30d";
     }
 

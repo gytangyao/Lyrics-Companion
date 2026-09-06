@@ -13,7 +13,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
-import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
@@ -34,7 +33,13 @@ final class LocalLyricClient {
     LrcTimeline load(String mediaUri, String title, String artist) {
         try {
             File sidecar = sidecarFile(mediaUri);
-            if (sidecar != null && sidecar.isFile()) return parse(new FileInputStream(sidecar));
+            if (sidecar == null && (title.startsWith("/") || title.startsWith("file://"))) {
+                sidecar = sidecarFile(title);
+            }
+            if (sidecar != null && sidecar.isFile()) {
+                LrcTimeline found = parse(new FileInputStream(sidecar));
+                if (!found.isEmpty()) return found;
+            }
         } catch (Throwable ignored) { }
         String tree = AppPreferences.localLyricDirectoryUri(context);
         if (tree.isEmpty() || Build.VERSION.SDK_INT < 21) return LrcTimeline.EMPTY;
@@ -52,7 +57,7 @@ final class LocalLyricClient {
         if (ContentResolver.SCHEME_FILE.equals(uri.getScheme())) path = uri.getPath();
         else if (uri.getScheme() == null || uri.getScheme().isEmpty()) path = mediaUri;
         if (path == null) return null;
-        path = URLDecoder.decode(path, "UTF-8");
+        // Uri.getPath already decodes file URIs. Raw paths must preserve '+' and literal '%'.
         int dot = path.lastIndexOf('.');
         return new File((dot > path.lastIndexOf(File.separatorChar) ? path.substring(0, dot) : path)
                 + ".lrc");
@@ -61,6 +66,7 @@ final class LocalLyricClient {
     private Set<String> candidateNames(String mediaUri, String title, String artist) {
         Set<String> names = new LinkedHashSet<>();
         addCandidate(names, title);
+        addCandidate(names, LocalTrackQueryRules.cleanFileTitle(title));
         addCandidate(names, artist + " - " + title);
         addCandidate(names, title + " - " + artist);
         try {

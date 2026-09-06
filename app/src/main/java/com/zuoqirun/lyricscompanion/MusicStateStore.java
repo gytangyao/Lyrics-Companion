@@ -46,6 +46,7 @@ final class MusicStateStore {
     private static Future<?> lyricLoadTask;
     private static boolean usingSessionTimeline;
     private static boolean sessionTimelineAllowed = true;
+    private static boolean notificationProgressUnknown;
 
     private MusicStateStore() {}
 
@@ -188,6 +189,7 @@ final class MusicStateStore {
                     + " speed=" + effectiveSpeed + " positionMs=" + positionToStore
                     + " durationMs=" + newDuration;
             active = newActive;
+            notificationProgressUnknown = !data.statePresent && data.positionMs < 0L;
             playing = newPlaying;
             source = normalizedSource;
             sourceName = normalizedSourceName;
@@ -304,6 +306,7 @@ final class MusicStateStore {
             hadState = active || !TextUtils.isEmpty(title);
             active = false;
             playing = false;
+            notificationProgressUnknown = false;
             source = "media";
             sourceName = "音乐播放器";
             sourcePackage = "";
@@ -445,7 +448,10 @@ final class MusicStateStore {
         if (snapshot.lyricAvailable && !snapshot.lyricSourceName.isEmpty()) {
             lyricState += " · " + snapshot.lyricSourceName;
         }
-        return snapshot.sourceName + " · " + (snapshot.playing ? "播放中" : "已暂停")
+        boolean unknownProgress;
+        synchronized (LOCK) { unknownProgress = notificationProgressUnknown; }
+        return snapshot.sourceName + " · " + (unknownProgress ? "已识别歌曲，播放器未提供进度"
+                : snapshot.playing ? "播放中" : "已暂停")
                 + "\n" + snapshot.title
                 + (snapshot.artist.isEmpty() ? "" : " · " + snapshot.artist)
                 + "\n" + lyricState;
@@ -484,6 +490,7 @@ final class MusicStateStore {
                                           boolean forcedPlayerCatalog) {
         synchronized (LOCK) {
             if (generation != trackGeneration) return;
+            final boolean bypassMatchedCache = !sessionTimelineAllowed;
             lyricLoadTask = LYRIC_EXECUTOR.submit(() -> {
                 long startedAt = SystemClock.elapsedRealtime();
                 DiagnosticLog.record(appContext, "Lyrics", "load task started generation="
@@ -497,7 +504,7 @@ final class MusicStateStore {
                                     return generation == trackGeneration && usingSessionTimeline
                                             ? timeline : LrcTimeline.EMPTY;
                                 }
-                            });
+                            }, bypassMatchedCache);
                     synchronized (LOCK) {
                         if (generation != trackGeneration || usingSessionTimeline
                                 && !"local".equals(result.providerId)) {

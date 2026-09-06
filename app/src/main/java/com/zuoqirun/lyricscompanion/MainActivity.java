@@ -749,7 +749,7 @@ public final class MainActivity extends AppCompatActivity {
             systemPage.addView(openSourceCard, cardMargins());
         }
 
-        TextView footnote = text("提示：支持发布 MediaSession 的在线、本地和 U 盘音乐播放器；文件名会自动清理路径、序号、扩展名和音质标记，仍不准确时可用“修正歌曲信息并重新匹配”。歌词伴侣不会向 iPhone CarPlay 仪表盘注入媒体信息。", 12,
+        TextView footnote = text("提示：在线、本地和 U 盘播放器优先读取系统媒体信息，缺失时尝试识别音乐通知；通知未提供进度时无法精准自动滚动。匹配歌词优先复用本地缓存；文件名会自动清理路径、序号、扩展名和音质标记，仍不准确时可用“修正歌曲信息并重新匹配”。歌词伴侣不会向 iPhone CarPlay 仪表盘注入媒体信息。", 12,
                 0xFF66788F, false);
         footnote.setLineSpacing(0f, 1.25f);
         LinearLayout.LayoutParams footnoteParams = new LinearLayout.LayoutParams(-1, -2);

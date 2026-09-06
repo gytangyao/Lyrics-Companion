@@ -165,7 +165,7 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
 
         LinearLayout cache = card("歌词缓存");
         addChoice(cache, "缓存保留方式",
-                new String[]{"默认 30 天", "永久保留", "按容量自动淘汰"},
+                new String[]{"保留 30 天", "永久保留", "按容量自动淘汰（默认）"},
                 new String[]{"30d", "forever", "capacity"},
                 AppPreferences.lyricCachePolicy(this),
                 value -> AppPreferences.get(this).edit()
@@ -174,6 +174,7 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
                 AppPreferences.lyricCacheLimitMb(this), " MB",
                 value -> AppPreferences.get(this).edit()
                         .putInt(AppPreferences.KEY_LYRIC_CACHE_LIMIT_MB, value).apply());
+        cache.addView(text("匹配成功后保存歌词、翻译和逐字时间轴；再次播放优先读取本地缓存，无需联网搜索。默认上限 128 MB；手动重新匹配会跳过歌曲匹配缓存。", 12, 0xFFD7E1EE, false));
         addCard(root, cache);
 
         LinearLayout artwork = card("背景与封面");
