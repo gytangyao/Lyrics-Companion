@@ -3609,9 +3609,13 @@ final class LyricsPanelView extends View {
 
     /**
      * Refined Now Playing's ending highlight, transplanted: the held word is never restyled,
-     * recoloured or rescaled, it simply blooms. The glow is a blurred halo painted *under* the
-     * glyphs, so the word keeps its own colour, its karaoke split and its stroke, and no pixel
-     * is ever painted twice — which is what used to double the neighbours and blank the tail.
+     * recoloured or rescaled, it simply blooms. The bloom is a text shadow painted *under* the
+     * glyphs, so the word keeps its own colour, its karaoke split and its stroke, and no pixel is
+     * ever painted twice — which is what used to double the neighbours and blank the tail.
+     *
+     * <p>A shadow layer rather than a blurred stroke: a mask filter forces a software layer whose
+     * bounds are the glyph geometry, and a bloom far wider than the glyphs is cut off at those
+     * bounds, which left a hard rectangular bite out of the end of the line.
      */
     private void drawTrailingGlow(Canvas canvas, String word, float wordLeft, float baseline,
                                   float size, int color, float wordProgress) {
@@ -3623,11 +3627,15 @@ final class LyricsPanelView extends View {
         int previousColor = paint.getColor();
         Paint.Align previousAlign = paint.getTextAlign();
         paint.setTextAlign(Paint.Align.LEFT);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(Math.max(2f, size * .34f));
-        paint.setColor(withAlpha(color, Math.round(205 * intensity)));
-        paint.setMaskFilter(blurMask(Math.max(3f, size * .5f)));
+        paint.setStyle(Paint.Style.FILL);
+        // The fill only tints; the shadow does the blooming. Keep the shadow's own layer free of
+        // the line's blur filter so the two never fight over the same draw.
+        paint.setMaskFilter(null);
+        paint.setShadowLayer(Math.max(3f, size * .5f), 0f, 0f,
+                withAlpha(color, Math.round(200 * intensity)));
+        paint.setColor(withAlpha(color, Math.round(70 * intensity)));
         canvas.drawText(word, wordLeft, baseline, paint);
+        paint.clearShadowLayer();
         paint.setMaskFilter(previousFilter);
         paint.setStyle(previousStyle);
         paint.setColor(previousColor);
