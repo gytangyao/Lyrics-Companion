@@ -23,10 +23,82 @@ const latestApk = path.join(apkDir, "lyrics_companion.apk");
 
 function log(message) { console.log(`[release-sync] ${message}`); }
 
+const RETRYABLE_CODES = new Set([
+  "ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "ETIMEDOUT", "EHOSTUNREACH",
+  "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN", "EPIPE", "EPROTO",
+  "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET", "UND_ERR_HEADERS_TIMEOUT",
+]);
+const RETRYABLE_RESPONSE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function retryDelayMs(attempt) {
+  const configuredBase = Number(process.env.SYNC_RETRY_BASE_DELAY_MS);
+  const configuredCap = Number(process.env.SYNC_RETRY_MAX_DELAY_MS);
+  const base = Number.isFinite(configuredBase) && configuredBase >= 0 ? configuredBase : 2000;
+  const cap = Number.isFinite(configuredCap) && configuredCap >= 0 ? configuredCap : 15000;
+  return Math.min(base * (2 ** attempt), cap);
+}
+
+function retryCount() {
+  const raw = Number(process.env.SYNC_MAX_RETRIES);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 3;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableFetchError(error) {
+  if (!(error instanceof TypeError)) return false;
+  const cause = error.cause;
+  if (!cause) return false;
+  if (typeof cause.code === "string" && RETRYABLE_CODES.has(cause.code)) return true;
+  if (typeof cause.message === "string") {
+    return /ECONNRESET|ETIMEDOUT|connect timeout|Client network socket disconnected|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|socket hang up/i.test(cause.message);
+  }
+  return false;
+}
+
+function isRetryableResponse(response) {
+  return Boolean(response) && RETRYABLE_RESPONSE_STATUSES.has(response.status);
+}
+
+async function discardResponse(response) {
+  if (!response || !response.body || typeof response.body.cancel !== "function") return;
+  try {
+    await response.body.cancel();
+  } catch (error) {
+    // The next retry must not be blocked by a failed best-effort body cancellation.
+  }
+}
+
+async function fetchWithRetry(url, options = {}, fetchImpl = fetch) {
+  const maxRetries = retryCount();
+  let lastError;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetchImpl(url, options);
+      if (!isRetryableResponse(response) || attempt === maxRetries) return response;
+      await discardResponse(response);
+      const delay = retryDelayMs(attempt);
+      log(`retry ${attempt + 1}/${maxRetries} for ${url} after ${delay}ms (HTTP ${response.status})`);
+      await sleep(delay);
+    } catch (error) {
+      if (!isRetryableFetchError(error)) throw error;
+      lastError = error;
+      if (attempt === maxRetries) break;
+      const delay = retryDelayMs(attempt);
+      const causeCode = (error.cause && error.cause.code) || "network error";
+      log(`retry ${attempt + 1}/${maxRetries} for ${url} after ${delay}ms (${causeCode})`);
+      await sleep(delay);
+    }
+  }
+  throw lastError;
+}
+
 async function request(url, json = false) {
   const headers = {"user-agent": "lyrics-companion-release-sync", "accept": "application/vnd.github+json"};
   if (githubToken) headers.authorization = `Bearer ${githubToken}`;
-  const response = await fetch(url, {headers, redirect: "follow"});
+  const response = await fetchWithRetry(url, {headers, redirect: "follow"});
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
   return json ? response.json() : Buffer.from(await response.arrayBuffer());
 }
@@ -170,7 +242,13 @@ async function main() {
   log(`synced ${latest.manifest.versionName} (${latest.manifest.versionCode})`);
 }
 
-main().catch((error) => {
-  console.error(`[release-sync] ${error.stack || error.message}`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`[release-sync] ${error.stack || error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  isRetryableFetchError, isRetryableResponse, retryDelayMs, retryCount, fetchWithRetry,
+};

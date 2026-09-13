@@ -7,9 +7,11 @@
     "start": "node server.js",
     "sync": "node sync-release.js",
     "sync:force": "node sync-release.js --force",
+    "sync:proxy": "node sync-with-fallback.js --proxy-only",
+    "sync:auto": "node sync-with-fallback.js",
     "test": "node --test"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.21"
   }
 }
