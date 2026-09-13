@@ -1061,22 +1061,14 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     }
 
     private boolean applyTopLyricBlur(WindowManager.LayoutParams params, WindowManager manager) {
-        if (Build.VERSION.SDK_INT < 31
-                || !"blur".equals(AppPreferences.topLyricBackground(this))) return false;
-        try {
-            if (manager == null || !manager.isCrossWindowBlurEnabled()) {
-                params.flags &= ~WindowManager.LayoutParams.FLAG_BLUR_BEHIND;
-                params.setBlurBehindRadius(0);
-                return false;
-            }
-            params.setBlurBehindRadius(dp(this, 28));
-            params.flags |= WindowManager.LayoutParams.FLAG_BLUR_BEHIND;
-            return true;
-        } catch (Throwable error) {
-            Log.w(TAG, "Window blur unavailable for top lyric strip", error);
+        if (Build.VERSION.SDK_INT >= 31) {
+            // FLAG_BLUR_BEHIND is implemented as a display-wide backdrop on some ROMs, even
+            // when this overlay window itself is narrow. Never use it for a lyric strip: the
+            // compact renderer supplies the safe local translucent-glass fallback instead.
+            params.setBlurBehindRadius(0);
             params.flags &= ~WindowManager.LayoutParams.FLAG_BLUR_BEHIND;
-            return false;
         }
+        return false;
     }
 
     private void dismissStatusLyricStrip() {

@@ -159,6 +159,20 @@ public class MusicAppRegistryTest {
                 MusicAppRegistry.selectionScore(0, true, false, true, false));
     }
 
+    @Test public void metadataSessionOutranksPlayingShellSession() {
+        assertTrue(MusicAppRegistry.selectionScore(5_000, true, false, false, false)
+                > MusicAppRegistry.selectionScore(10_000, false, true, false, false));
+    }
+
+    @Test public void emptySessionCannotSuppressNotificationFallback() {
+        assertFalse(MusicNotificationListener.hasUsableTitle(
+                new MusicPlaybackData("", "", "", null, "", "", 0L, true,
+                        MusicPlaybackData.STATE_PLAYING, 0L, 0L, 0f)));
+        assertTrue(MusicNotificationListener.hasUsableTitle(
+                new MusicPlaybackData("", "晴天", "周杰伦", null, "", "", 0L, true,
+                        MusicPlaybackData.STATE_PAUSED, 0L, 0L, 0f)));
+    }
+
     @Test public void notificationListenerHealthRequiresAFreshSuccessfulRead() {
         assertTrue(MusicNotificationListener.isHealthyAt(true, 1_000L, 3_999L, 3_000L));
         assertFalse(MusicNotificationListener.isHealthyAt(true, 1_000L, 4_000L, 3_000L));

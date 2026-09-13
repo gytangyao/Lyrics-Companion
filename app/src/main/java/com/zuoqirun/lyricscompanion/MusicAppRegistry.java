@@ -118,7 +118,9 @@ final class MusicAppRegistry {
                               boolean supportsTransportControls, boolean known,
                               boolean currentSession) {
         int score = playbackRank;
-        if (hasMetadata) score += 200;
+        // A title is the minimum usable payload for lyric display. Prefer a paused session
+        // with metadata over a playing shell session that cannot identify a track at all.
+        if (hasMetadata) score += 10_000;
         if (supportsTransportControls) score += 40;
         if (currentSession) score += 10;
         return score;

@@ -1833,9 +1833,15 @@ public final class MainActivity extends AppCompatActivity {
                         | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                         | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
         try {
+            if (intent.resolveActivity(getPackageManager()) == null) {
+                SafeToast.show(this, "此设备没有目录选择器。将 .lrc 与歌曲放在同一目录即可直接匹配，无需授权。",
+                        Toast.LENGTH_LONG);
+                return;
+            }
             startActivityForResult(intent, REQUEST_LOCAL_LYRIC_DIRECTORY);
         } catch (Throwable error) {
-            SafeToast.show(this, "此设备没有可用的目录选择器。", Toast.LENGTH_LONG);
+            SafeToast.show(this, "无法打开目录选择器。将 .lrc 与歌曲放在同一目录即可直接匹配，无需授权。",
+                    Toast.LENGTH_LONG);
         }
     }
 

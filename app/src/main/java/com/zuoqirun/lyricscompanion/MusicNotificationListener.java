@@ -78,6 +78,13 @@ public final class MusicNotificationListener extends NotificationListenerService
 
         @Override public void onSession(String packageName, String applicationLabel,
                                         MusicPlaybackData data) {
+            if (!hasUsableTitle(data)) {
+                // Empty system sessions must neither replace a usable player nor suppress the
+                // notification fallback. Some car media centers continuously report PLAYING
+                // while publishing no metadata at all.
+                refreshNotificationSession();
+                return;
+            }
             lastStandardSessionElapsedMs = SystemClock.elapsedRealtime();
             if (shouldYieldToActiveDftcSession(activePlayerPackageName,
                     dftcReader != null && dftcReader.hasUsableSession(),
@@ -603,6 +610,10 @@ public final class MusicNotificationListener extends NotificationListenerService
 
     static boolean shouldClearAfterEmpty(long lastNonEmptyElapsedMs, long nowElapsedMs) {
         return nowElapsedMs - lastNonEmptyElapsedMs >= EMPTY_SESSION_GRACE_MS;
+    }
+
+    static boolean hasUsableTitle(MusicPlaybackData data) {
+        return data != null && data.title != null && !data.title.trim().isEmpty();
     }
 
     /**
