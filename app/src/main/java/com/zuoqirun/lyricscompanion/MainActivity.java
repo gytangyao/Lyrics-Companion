@@ -391,6 +391,9 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout.LayoutParams localDirectoryParams = new LinearLayout.LayoutParams(-1, dp(48));
         localDirectoryParams.topMargin = dp(8);
         lyricCard.addView(localLyricDirectory, localDirectoryParams);
+        MaterialButton localLyricPath = button("手动填写歌词目录路径", false);
+        localLyricPath.setOnClickListener(v -> editLocalLyricDirectoryPath());
+        lyricCard.addView(localLyricPath, new LinearLayout.LayoutParams(-1, dp(48)));
         MaterialSwitch avrcp = toggle("蓝牙 AVRCP 歌曲识别",
                 "车机作为蓝牙音频接收端时，读取手机通过 AVRCP 提供的歌名和歌手，再进入现有歌词匹配链");
         avrcp.setChecked(AppPreferences.avrcpEnabled(this));
@@ -1843,6 +1846,34 @@ public final class MainActivity extends AppCompatActivity {
             SafeToast.show(this, "无法打开目录选择器。将 .lrc 与歌曲放在同一目录即可直接匹配，无需授权。",
                     Toast.LENGTH_LONG);
         }
+    }
+
+    private void editLocalLyricDirectoryPath() {
+        TextInputLayout layout = new TextInputLayout(this);
+        layout.setHint("例如 /storage/XXXX-XXXX/Music");
+        layout.setPadding(dp(20), 0, dp(20), 0);
+        TextInputEditText input = new TextInputEditText(this);
+        input.setSingleLine(true);
+        input.setText(AppPreferences.localLyricDirectoryPath(this));
+        layout.addView(input);
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("手动填写本地歌词目录")
+                .setMessage("用于没有系统目录选择器的车机。应用只在该目录及其子目录查找匹配的 .lrc；路径不会导出到配置分享码。")
+                .setView(layout)
+                .setNegativeButton("取消", null)
+                .setNeutralButton("清除", (dialog, which) -> {
+                    AppPreferences.get(this).edit()
+                            .remove(AppPreferences.KEY_LOCAL_LYRIC_DIRECTORY_PATH).apply();
+                    MusicStateStore.reloadLyrics(this);
+                })
+                .setPositiveButton("保存", (dialog, which) -> {
+                    String path = input.getText() == null ? "" : input.getText().toString().trim();
+                    AppPreferences.get(this).edit()
+                            .putString(AppPreferences.KEY_LOCAL_LYRIC_DIRECTORY_PATH, path).apply();
+                    MusicStateStore.reloadLyrics(this);
+                    SafeToast.show(this, path.isEmpty() ? "已清除手动歌词目录" : "已保存手动歌词目录",
+                            Toast.LENGTH_SHORT);
+                }).show();
     }
 
     private boolean startDocumentPicker(Intent intent) {

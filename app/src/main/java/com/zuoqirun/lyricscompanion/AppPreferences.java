@@ -38,6 +38,7 @@ final class AppPreferences {
     static final String KEY_LYRIC_SOURCE_OFFSET = "lyric_source_offset";
     static final String KEY_NEXT_LYRIC_SCALE = "next_lyric_scale";
     static final String KEY_NEXT_LYRIC_OPACITY = "next_lyric_opacity";
+    static final String KEY_PREVIOUS_LYRIC_OPACITY = "previous_lyric_opacity";
     static final String KEY_LYRIC_COLOR = "lyric_color";
     static final String KEY_CURRENT_LYRIC_COLOR = "current_lyric_color";
     static final String KEY_INACTIVE_LYRIC_COLOR = "inactive_lyric_color";
@@ -154,6 +155,7 @@ final class AppPreferences {
     static final String KEY_BOTTOM_SPECTRUM_HEIGHT_DP = "bottom_spectrum_height_dp";
     static final String KEY_LOCAL_LYRIC_ENABLED = "local_lyric_enabled";
     static final String KEY_LOCAL_LYRIC_DIRECTORY_URI = "local_lyric_directory_uri";
+    static final String KEY_LOCAL_LYRIC_DIRECTORY_PATH = "local_lyric_directory_path";
     static final String KEY_AVRCP_ENABLED = "avrcp_enabled";
     static final String KEY_LOCKSCREEN_LYRICS = "lockscreen_lyrics";
     static final String KEY_CUSTOM_FONT_FILE = "custom_font_file";
@@ -380,6 +382,11 @@ final class AppPreferences {
     static int nextLyricOpacity(Context context, boolean secondary) {
         return Math.max(20, Math.min(100,
                 displayInt(context, secondary, KEY_NEXT_LYRIC_OPACITY, 100)));
+    }
+
+    static int previousLyricOpacity(Context context, boolean secondary) {
+        return Math.max(0, Math.min(100,
+                displayInt(context, secondary, KEY_PREVIOUS_LYRIC_OPACITY, 100)));
     }
 
     /** Zero means that the selected overlay style keeps controlling lyric colors. */
@@ -978,6 +985,10 @@ final class AppPreferences {
 
     static String localLyricDirectoryUri(Context context) {
         return get(context).getString(KEY_LOCAL_LYRIC_DIRECTORY_URI, "");
+    }
+
+    static String localLyricDirectoryPath(Context context) {
+        return get(context).getString(KEY_LOCAL_LYRIC_DIRECTORY_PATH, "");
     }
 
     static boolean avrcpEnabled(Context context) {

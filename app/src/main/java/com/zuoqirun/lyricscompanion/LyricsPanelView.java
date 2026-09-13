@@ -81,6 +81,7 @@ final class LyricsPanelView extends View {
     private String frameLyricSourceName = "";
     private float nextLyricScale = 0.70f;
     private int nextLyricOpacity = 100;
+    private int previousLyricOpacity = 100;
     private boolean smoothLyricScroll = true;
     private int backgroundBlur;
     private int backgroundDim;
@@ -229,6 +230,7 @@ final class LyricsPanelView extends View {
         lyricSourceColor = AppPreferences.lyricSourceColor(getContext(), secondary);
         nextLyricScale = AppPreferences.nextLyricScale(getContext(), secondary) / 100f;
         nextLyricOpacity = AppPreferences.nextLyricOpacity(getContext(), secondary);
+        previousLyricOpacity = AppPreferences.previousLyricOpacity(getContext(), secondary);
         smoothLyricScroll = AppPreferences.smoothLyricScroll(getContext(), secondary);
         backgroundBlur = AppPreferences.styleBlur(getContext(), secondary);
         backgroundDim = AppPreferences.styleDim(getContext(), secondary);
@@ -1012,7 +1014,8 @@ final class LyricsPanelView extends View {
                 int distance = Math.min(3, Math.abs(line.offset));
                 int alpha = Math.max(72, 184 - distance * 30);
                 drawCentered(canvas, line.text, baseline, secondarySize,
-                        nextLyricColor(inactiveLyricColor(withAlpha(0xFFFFFFFF, alpha))),
+                        adjacentLyricColor(inactiveLyricColor(withAlpha(0xFFFFFFFF, alpha)),
+                                line.offset),
                         maxWidth, Typeface.NORMAL);
             }
             float lineBlockHeight = lineSize;
@@ -1024,7 +1027,8 @@ final class LyricsPanelView extends View {
                 int translationAlpha = current ? 190
                         : Math.max(56, 148 - Math.min(3, Math.abs(line.offset)) * 24);
                 drawCentered(canvas, line.translated, translationBaseline, translationSize,
-                        nextLyricColor(lyricColor(withAlpha(0xFFFFFFFF, translationAlpha))),
+                        adjacentLyricColor(lyricColor(withAlpha(0xFFFFFFFF, translationAlpha)),
+                                line.offset),
                         maxWidth, Typeface.NORMAL);
                 lineBlockHeight += lineSize * PureLyricLayout.TRANSLATION_GAP_RATIO
                         + translationSize;
@@ -1332,7 +1336,8 @@ final class LyricsPanelView extends View {
                     (bottom - centerY + fontSize) / Math.max(1f, bottom - currentY)) * 1.7f);
             float opacityValue = AmllStyleMotion.lineOpacity(offset, snapshot.playing, previewing)
                     * edgeFade;
-            if (offset == 1) opacityValue *= nextLyricOpacity / 100f;
+            if (offset > 0) opacityValue *= nextLyricOpacity / 100f;
+            else if (offset < 0) opacityValue *= previousLyricOpacity / 100f;
             if (opacityValue <= 0.01f || centerY < -fontSize || top > bottom + fontSize) continue;
 
             float scale = AmllStyleMotion.lineScale(offset);
@@ -1909,7 +1914,8 @@ final class LyricsPanelView extends View {
             float scale = refinedLyricZoom ? refinedScaleForOffset(offset) : 1f;
             if (offset == 1) scale *= nextLyricScale;
             float opacity = offset == 0 ? 1f : 0.40f;
-            if (offset == 1) opacity *= nextLyricOpacity / 100f;
+            if (offset > 0) opacity *= nextLyricOpacity / 100f;
+            else if (offset < 0) opacity *= previousLyricOpacity / 100f;
             if (refinedLyricFade && Math.abs(offset) > 1) {
                 opacity *= Math.max(0f, 1f - 0.4f * (Math.abs(offset) - 1));
             }
@@ -2008,6 +2014,11 @@ final class LyricsPanelView extends View {
 
     private int nextLyricColor(int color) {
         return withAlpha(color, Math.round(Color.alpha(color) * nextLyricOpacity / 100f));
+    }
+
+    private int adjacentLyricColor(int color, int offset) {
+        int opacity = offset < 0 ? previousLyricOpacity : nextLyricOpacity;
+        return withAlpha(color, Math.round(Color.alpha(color) * opacity / 100f));
     }
 
     private int lyricColor(int fallback) {

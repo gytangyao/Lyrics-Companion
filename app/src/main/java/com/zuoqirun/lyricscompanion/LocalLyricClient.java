@@ -41,10 +41,18 @@ final class LocalLyricClient {
                 if (!found.isEmpty()) return found;
             }
         } catch (Throwable ignored) { }
+        Set<String> candidates = candidateNames(mediaUri, title, artist);
+        String path = AppPreferences.localLyricDirectoryPath(context);
+        if (!path.isEmpty()) {
+            try {
+                LrcTimeline found = searchDirectory(new File(path), candidates);
+                if (!found.isEmpty()) return found;
+            } catch (Throwable ignored) { }
+        }
         String tree = AppPreferences.localLyricDirectoryUri(context);
         if (tree.isEmpty() || Build.VERSION.SDK_INT < 21) return LrcTimeline.EMPTY;
         try {
-            return searchTree(Uri.parse(tree), candidateNames(mediaUri, title, artist));
+            return searchTree(Uri.parse(tree), candidates);
         } catch (Throwable ignored) {
             return LrcTimeline.EMPTY;
         }
@@ -122,6 +130,28 @@ final class LocalLyricClient {
                 new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
             return cursor != null && cursor.moveToFirst() ? cursor.getString(0) : "";
         } catch (Throwable ignored) { return ""; }
+    }
+
+    private LrcTimeline searchDirectory(File root, Set<String> candidates) throws Exception {
+        if (root == null || !root.isDirectory()) return LrcTimeline.EMPTY;
+        ArrayDeque<File> directories = new ArrayDeque<>();
+        directories.add(root);
+        int visited = 0;
+        while (!directories.isEmpty() && visited < MAX_DOCUMENTS) {
+            File directory = directories.removeFirst();
+            File[] children = directory.listFiles();
+            if (children == null) continue;
+            for (File child : children) {
+                if (visited++ >= MAX_DOCUMENTS) break;
+                if (child.isDirectory()) {
+                    directories.addLast(child);
+                } else if (candidates.contains(normalize(child.getName()))) {
+                    LrcTimeline timeline = parse(new FileInputStream(child));
+                    if (!timeline.isEmpty()) return timeline;
+                }
+            }
+        }
+        return LrcTimeline.EMPTY;
     }
 
     private static LrcTimeline parse(InputStream input) throws Exception {

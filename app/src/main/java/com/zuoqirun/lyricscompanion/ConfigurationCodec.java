@@ -76,6 +76,7 @@ final class ConfigurationCodec {
                 && !key.startsWith("player_package_")
                 && !key.startsWith("hide_overlays_in_apps")
                 && !key.equals(AppPreferences.KEY_LOCAL_LYRIC_DIRECTORY_URI)
+                && !key.equals(AppPreferences.KEY_LOCAL_LYRIC_DIRECTORY_PATH)
                 && !key.equals(AppPreferences.KEY_CUSTOM_FONT_FILE)
                 && !key.equals(AppPreferences.KEY_LAUNCH_OVERLAY_LAST_AT)
                 && !key.equals(AppPreferences.KEY_SERVICE_STOPPED_BY_USER)
