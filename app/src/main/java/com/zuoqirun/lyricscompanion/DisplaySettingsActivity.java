@@ -87,6 +87,24 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
                 AppPreferences.previousLyricOpacity(this, secondary), "%",
                 value -> AppPreferences.putDisplayInt(this, secondary,
                         AppPreferences.KEY_PREVIOUS_LYRIC_OPACITY, value));
+        // 粒子量 and 逐字歌词及时擦除 belong to the dissolve: they are only offered while it is
+        // switched on, and go away with it. The holder exists because the master toggle is built
+        // before the rows it controls.
+        final View[][] dependents = new View[1][];
+        MaterialSwitch dissolve = addToggle(panel, "本句结束粒子消散",
+                AppPreferences.KEY_PREVIOUS_LYRIC_PARTICLES,
+                AppPreferences.previousLyricParticles(this, secondary),
+                () -> setDependentVisibility(
+                        AppPreferences.previousLyricParticles(this, secondary), dependents[0]));
+        View[] amountRow = addSeekRow(panel, "粒子量", 20, 300,
+                AppPreferences.particleAmountPercent(this, secondary), "%",
+                value -> AppPreferences.putDisplayInt(this, secondary,
+                        AppPreferences.KEY_PARTICLE_AMOUNT, value));
+        MaterialSwitch wordErase = addToggle(panel, "逐字歌词及时擦除",
+                AppPreferences.KEY_WORD_DISSOLVE,
+                AppPreferences.wordDissolve(this, secondary), null);
+        dependents[0] = new View[] { amountRow[0], amountRow[1], wordErase };
+        setDependentVisibility(dissolve.isChecked(), dependents[0]);
         addToggle(panel, "显示播放器与歌词来源状态行", AppPreferences.KEY_SHOW_PLAYER_STATUS,
                 AppPreferences.showPlayerStatus(this, secondary));
         addToggle(panel, "显示进度条", AppPreferences.KEY_SHOW_PROGRESS,
@@ -292,6 +310,17 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
 
     private void addSeek(LinearLayout parent, String title, int min, int max,
                          int initial, String suffix, IntConsumer consumer) {
+        addSeekRow(parent, title, min, max, initial, suffix, consumer);
+    }
+
+    /**
+     * Adds a seek row and hands back the views it created, so a setting that only applies while
+     * another one is on can be hidden together with its label and value.
+     *
+     * @return the label row and the bar, in that order
+     */
+    private View[] addSeekRow(LinearLayout parent, String title, int min, int max,
+                              int initial, String suffix, IntConsumer consumer) {
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(0, dp(12), 0, 0);
@@ -319,9 +348,15 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
             @Override public void onStopTrackingTouch(SeekBar bar) { }
         });
         parent.addView(seek, new LinearLayout.LayoutParams(-1, dp(38)));
+        return new View[] { row, seek };
     }
 
     private void addToggle(LinearLayout parent, String title, String key, boolean initial) {
+        addToggle(parent, title, key, initial, null);
+    }
+
+    private MaterialSwitch addToggle(LinearLayout parent, String title, String key,
+                                     boolean initial, Runnable onToggled) {
         MaterialSwitch toggle = new MaterialSwitch(this);
         toggle.setText(title);
         toggle.setTextColor(0xFFF1F5FA);
@@ -339,9 +374,19 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
                         "请在首页“使用权限”中授予录音频谱权限",
                         android.widget.Toast.LENGTH_LONG);
             }
+            if (onToggled != null) onToggled.run();
             changed();
         });
         parent.addView(toggle);
+        return toggle;
+    }
+
+    /** Shows or hides settings that only mean anything while another one is switched on. */
+    private static void setDependentVisibility(boolean visible, View... views) {
+        int visibility = visible ? View.VISIBLE : View.GONE;
+        for (View view : views) {
+            if (view != null) view.setVisibility(visibility);
+        }
     }
 
     private void addChoice(LinearLayout parent, String title, String[] labels, String[] values,

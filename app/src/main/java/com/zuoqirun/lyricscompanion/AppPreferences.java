@@ -39,6 +39,9 @@ final class AppPreferences {
     static final String KEY_NEXT_LYRIC_SCALE = "next_lyric_scale";
     static final String KEY_NEXT_LYRIC_OPACITY = "next_lyric_opacity";
     static final String KEY_PREVIOUS_LYRIC_OPACITY = "previous_lyric_opacity";
+    static final String KEY_PREVIOUS_LYRIC_PARTICLES = "previous_lyric_particles";
+    static final String KEY_PARTICLE_AMOUNT = "previous_lyric_particle_amount";
+    static final String KEY_WORD_DISSOLVE = "word_dissolve";
     static final String KEY_SHOW_PLAYER_STATUS = "show_player_status";
     static final String KEY_SHOW_PROGRESS = "show_progress";
     static final String KEY_LYRIC_COLOR = "lyric_color";
@@ -389,6 +392,21 @@ final class AppPreferences {
     static int previousLyricOpacity(Context context, boolean secondary) {
         return Math.max(0, Math.min(100,
                 displayInt(context, secondary, KEY_PREVIOUS_LYRIC_OPACITY, 100)));
+    }
+
+    static boolean previousLyricParticles(Context context, boolean secondary) {
+        return displayBoolean(context, secondary, KEY_PREVIOUS_LYRIC_PARTICLES, true);
+    }
+
+    /** Erases each word of the current line as soon as it has been sung. */
+    static boolean wordDissolve(Context context, boolean secondary) {
+        return displayBoolean(context, secondary, KEY_WORD_DISSOLVE, false);
+    }
+
+    /** Dust density for the dissolve, as a percentage of the designed amount. */
+    static int particleAmountPercent(Context context, boolean secondary) {
+        return Math.max(20, Math.min(300,
+                displayInt(context, secondary, KEY_PARTICLE_AMOUNT, 100)));
     }
 
     static boolean showPlayerStatus(Context context, boolean secondary) {

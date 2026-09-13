@@ -8,6 +8,7 @@ import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PorterDuff;
@@ -82,6 +83,11 @@ final class LyricsPanelView extends View {
     private float nextLyricScale = 0.70f;
     private int nextLyricOpacity = 100;
     private int previousLyricOpacity = 100;
+    private boolean previousLyricParticles = true;
+    private boolean wordDissolve;
+    private int particleAmountPercent = 100;
+    /** Set only while panel metadata (title / artist / source) is being drawn. */
+    private boolean drawingMetadata;
     private boolean showPlayerStatus = true;
     private boolean showProgress = true;
     private boolean smoothLyricScroll = true;
@@ -154,7 +160,10 @@ final class LyricsPanelView extends View {
     private final float[] compactVirtualSpectrum = new float[SpectrumMath.BAND_COUNT];
     private final float[] compactDisplayedSpectrum = new float[SpectrumMath.BAND_COUNT];
     private final RectF spectrumRect = new RectF();
+    private final RectF dissolveBoxRect = new RectF();
+    private final Matrix dissolveBoxMatrix = new Matrix();
     private boolean compactSpectrumAnimating;
+    private final LyricDissolveEffect previousLyricDissolve = new LyricDissolveEffect();
     private final boolean fullscreen;
     private final boolean compactTextOnly;
     private boolean topWindowBlurActive;
@@ -233,6 +242,10 @@ final class LyricsPanelView extends View {
         nextLyricScale = AppPreferences.nextLyricScale(getContext(), secondary) / 100f;
         nextLyricOpacity = AppPreferences.nextLyricOpacity(getContext(), secondary);
         previousLyricOpacity = AppPreferences.previousLyricOpacity(getContext(), secondary);
+        previousLyricParticles = AppPreferences.previousLyricParticles(getContext(), secondary);
+        wordDissolve = AppPreferences.wordDissolve(getContext(), secondary);
+        particleAmountPercent = AppPreferences.particleAmountPercent(getContext(), secondary);
+        previousLyricDissolve.setParticleAmount(particleAmountPercent);
         showPlayerStatus = AppPreferences.showPlayerStatus(getContext(), secondary);
         showProgress = AppPreferences.showProgress(getContext(), secondary);
         smoothLyricScroll = AppPreferences.smoothLyricScroll(getContext(), secondary);
@@ -276,6 +289,7 @@ final class LyricsPanelView extends View {
         blurPreview = null;
         blurSource = null;
         clearTextCaches();
+        previousLyricDissolve.reset();
         invalidate();
     }
 
@@ -305,6 +319,29 @@ final class LyricsPanelView extends View {
         frameArtist = snapshot.artist;
         frameSourceName = snapshot.sourceName;
         frameLyricSourceName = snapshot.lyricSourceName;
+
+        // The dissolve timeline has to be advanced before the layouts draw: they ask it, glyph
+        // by glyph, how much of the previous line is still there this frame.
+        boolean browsing = browsingLyrics || browseSettling || browseUntilElapsedMs > now;
+        if (previousLyricParticles && snapshot.active) {
+            previousLyricDissolve.sync(snapshot.lyrics.lineStartMs, snapshot.lyrics.previousLyric,
+                    snapshot.playing, browsing, now);
+        } else {
+            previousLyricDissolve.reset();
+        }
+        // Runs after sync(): a line change clears the per-word erase, then the new line picks up
+        // however much of itself has already been sung. The erase is part of the dissolve, so it
+        // only runs while that is switched on.
+        //
+        // It follows the *playing* line even while the user is scrolling through the sheet: the
+        // erase is scoped to that one line identity, so the words keep coming apart as they are
+        // sung (instead of being restored and re-eaten around every scroll), while the lines the
+        // user scrolled to are drawn whole because the erase does not belong to them.
+        MusicSnapshot playingLine = browsing ? MusicStateStore.snapshot(lyricOffsetMs) : snapshot;
+        previousLyricDissolve.syncWordErase(playingLine.lyrics.lineStartMs,
+                playingLine.lyrics.completedLyric, playingLine.lyrics.lyric.length(),
+                wordDissolve && previousLyricParticles && playingLine.active,
+                playingLine.lyrics.wordTimed, now);
 
         if ("amll".equals(overlayStyle)) {
             drawAmll(canvas, snapshot, density);
@@ -336,6 +373,7 @@ final class LyricsPanelView extends View {
                 && !compactTextOnly && !"pure".equals(overlayStyle)) {
             drawPlaybackControls(canvas, snapshot, density);
         }
+        drawPreviousLyricDust(canvas, now);
         scheduleNextFrame(nextFrameDelay(snapshot, now));
     }
 
@@ -365,6 +403,9 @@ final class LyricsPanelView extends View {
         }
         if (!snapshot.active) return 750L;
         if (!snapshot.playing) return 400L;
+        if (previousLyricDissolve.isAnimating(nowElapsedMs)) return 16L;
+        if (wordDissolve && previousLyricParticles
+                && previousLyricDissolve.isEraseAnimating(snapshot.lyrics.lineStartMs)) return 16L;
         if (snapshot.lyrics.wordTimed && snapshot.lyrics.wordDurationMs > 0L
                 && !snapshot.lyrics.currentWord.isEmpty()) return 16L;
         if ("amll".equals(overlayStyle)) return 33L;
@@ -823,6 +864,8 @@ final class LyricsPanelView extends View {
                 + lyricSource : "歌词伴侣  ·  等待音乐";
         int classicTextSave = canvas.save();
         canvas.clipRect(0f, 0f, width, Math.max(1f, lyricClipBottom));
+        // Panel metadata: its own colours, and never an outline.
+        drawingMetadata = true;
         if (showPlayerStatus) {
             drawCentered(canvas, status, statusBaseline, 11f * density * classicTextScale * unit,
                     snapshot.playing ? 0xFF6EE7F2 : 0xFF8392A8, usableWidth, Typeface.BOLD);
@@ -831,12 +874,13 @@ final class LyricsPanelView extends View {
         drawCentered(canvas, snapshot.active ? snapshot.title : "打开音乐播放器并开始播放",
                 titleBaseline,
                 15f * density * titleScale * unit, 0xFFF6F9FF, usableWidth, Typeface.BOLD);
+        drawingMetadata = false;
         float basicScrollShift = basicLyricEntryShift(snapshot.lyrics.lineStartMs,
                 32f * density * unit);
-        drawCentered(canvas, snapshot.lyrics.previousLyric,
+        drawCenteredDissolving(canvas, snapshot.lyrics.previousLyric,
                 previousBaseline + previewShift + basicScrollShift,
                 12f * density * classicTextScale * unit, inactiveLyricColor(0xFF68778C), usableWidth,
-                Typeface.NORMAL);
+                Typeface.NORMAL, LyricDissolveEffect.UNKNOWN_LINE);
         if (snapshot.lyrics.interlude) {
             float dotRadius = 22f * density * classicTextScale * unit * 0.35f;
             float dotWidth = interludeDotsWidth(dotRadius);
@@ -1019,10 +1063,15 @@ final class LyricsPanelView extends View {
             } else {
                 int distance = Math.min(3, Math.abs(line.offset));
                 int alpha = Math.max(72, 184 - distance * 30);
-                drawCentered(canvas, line.text, baseline, secondarySize,
-                        adjacentLyricColor(inactiveLyricColor(withAlpha(0xFFFFFFFF, alpha)),
-                                line.offset),
-                        maxWidth, Typeface.NORMAL);
+                int lineColor = adjacentLyricColor(inactiveLyricColor(withAlpha(0xFFFFFFFF, alpha)),
+                        line.offset);
+                if (line.offset == -1) {
+                    drawCenteredDissolving(canvas, line.text, baseline, secondarySize, lineColor,
+                            maxWidth, Typeface.NORMAL, line.timeMs);
+                } else {
+                    drawCentered(canvas, line.text, baseline, secondarySize, lineColor,
+                            maxWidth, Typeface.NORMAL);
+                }
             }
             float lineBlockHeight = lineSize;
             if (showTranslation) {
@@ -1134,6 +1183,7 @@ final class LyricsPanelView extends View {
         float textLeft = contentLeft;
         float textWidth = Math.max(1f, infoWidth);
         float y = coverRect.bottom + 18f * density + titleSize;
+        drawingMetadata = true;
         drawRefinedText(canvas, snapshot.active ? snapshot.title : "等待音乐",
                 textLeft, y, titleSize, primaryText, textWidth,
                 Paint.Align.LEFT, Typeface.NORMAL, 255);
@@ -1145,6 +1195,7 @@ final class LyricsPanelView extends View {
             drawRefinedText(canvas, snapshot.sourceName + sourceSuffix(snapshot), textLeft, y,
                     metaSize, secondaryText, textWidth, Paint.Align.LEFT, Typeface.NORMAL, 145);
         }
+        drawingMetadata = false;
     }
 
     /** Immersive native interpretation of Apple Music-like Lyrics as a floating window. */
@@ -1366,6 +1417,9 @@ final class LyricsPanelView extends View {
             } else if (offset == 0) {
                 drawAmllWrappedKaraoke(canvas, snapshot, currentText(snapshot), left, top,
                         fontSize, width, 3, currentLyricColor(0xFFFFFFFF));
+            } else if (offset == -1) {
+                drawWrappedTextDissolving(canvas, line.text, left, top, fontSize, lineColor,
+                        width, Typeface.BOLD, 3, line.timeMs);
             } else {
                 drawWrappedText(canvas, line.text, left, top, fontSize, lineColor,
                         width, Typeface.BOLD, 3);
@@ -1454,14 +1508,22 @@ final class LyricsPanelView extends View {
                                     float requestedSize, int color, float maxWidth,
                                     int style, int alpha) {
         if (value == null || value.isEmpty()) return;
-        float size = fitSize(value, requestedSize, maxWidth, style);
-        setTextPaintForValue(size, style, value);
-        paint.setTextAlign(Paint.Align.LEFT);
-        if (drawSplitSourceMetadata(canvas, value, x, baseline, maxWidth,
-                Paint.Align.LEFT, alpha)) return;
-        color = resolveMetadataColor(value, color);
-        paint.setColor(withAlpha(color, alpha));
-        canvas.drawText(ellipsize(value.replace('\n', ' '), maxWidth), x, baseline, paint);
+        // Only the title and artist come through here, so it declares itself as metadata rather
+        // than making every caller remember to.
+        boolean wasMetadata = drawingMetadata;
+        drawingMetadata = true;
+        try {
+            float size = fitSize(value, requestedSize, maxWidth, style);
+            setTextPaintForValue(size, style, value);
+            paint.setTextAlign(Paint.Align.LEFT);
+            if (drawSplitSourceMetadata(canvas, value, x, baseline, maxWidth,
+                    Paint.Align.LEFT, alpha)) return;
+            color = resolveMetadataColor(value, color);
+            paint.setColor(withAlpha(color, alpha));
+            canvas.drawText(ellipsize(value.replace('\n', ' '), maxWidth), x, baseline, paint);
+        } finally {
+            drawingMetadata = wasMetadata;
+        }
     }
 
     /** A small horizontal media strip: lyric-led, with cover artwork as a side anchor. */
@@ -1526,12 +1588,14 @@ final class LyricsPanelView extends View {
                     ? coverRect.bottom - 3f * density
                     : titleY + artistSize + 3f * density;
             int metadataColor = overlayMetadata ? Color.WHITE : primaryText;
+            drawingMetadata = true;
             drawRefinedText(canvas, snapshot.active ? snapshot.title : "等待音乐",
                     coverRect.centerX(), titleY, titleSize, metadataColor, coverRect.width(),
                     Paint.Align.CENTER, Typeface.BOLD, 255);
             drawRefinedText(canvas, snapshot.artist, coverRect.centerX(), artistY, artistSize,
                     withAlpha(metadataColor, 200), coverRect.width(), Paint.Align.CENTER,
                     Typeface.NORMAL, 175);
+            drawingMetadata = false;
         }
 
         float lyricLeft = pad;
@@ -1577,25 +1641,31 @@ final class LyricsPanelView extends View {
                     lyricColor(primaryText), lyricWidth, Paint.Align.CENTER, Typeface.NORMAL,
                     135);
         }
-        if (snapshot.lyrics.interlude) {
-            compactMarqueeActive = false;
-            compactMarqueeText = "";
-            compactMarqueeElapsedMs = 0L;
-            float dotRadius = lyricSize * 0.20f;
-            float dotWidth = interludeDotsWidth(dotRadius);
-            drawInterludeDots(canvas, snapshot, lyricLeft + (lyricWidth - dotWidth) * 0.5f,
-                    baseline - lyricSize * 0.72f,
-                    dotRadius, lyricColor(primaryText));
+        // This strip has no previous-line row, so the line that just stopped being current
+        // crumbles away where it was. The new line is only painted where the eraser has already
+        // passed, which is what keeps it from appearing before the old one is gone.
+        String leaving = snapshot.lyrics.previousLyric;
+        float eraseFront = Float.NaN;
+        if (!snapshot.lyrics.interlude && !leaving.isEmpty()) {
+            eraseFront = previousLineEraseFront(leaving, lyricLeft + lyricWidth * 0.5f, baseline,
+                    lyricSize, lyricWidth, Typeface.BOLD, Paint.Align.CENTER);
+        }
+        if (!Float.isNaN(eraseFront)) {
+            int reveal = canvas.save();
+            canvas.clipRect(0f, 0f, eraseFront, height);
+            drawCompactCurrentLine(canvas, snapshot, density, lyricLeft, lyricWidth, baseline,
+                    lyricSize, secondaryBaseline, secondaryLineSize, secondaryText,
+                    showTranslation, lyricColor(withAlpha(primaryText, 120)),
+                    lyricColor(primaryText), lyricColor(withAlpha(primaryText, 165)));
+            canvas.restoreToCount(reveal);
+            drawDissolvingLine(canvas, leaving, lyricLeft + lyricWidth * 0.5f, baseline, lyricSize,
+                    lyricColor(primaryText), lyricWidth, Typeface.BOLD, Paint.Align.CENTER,
+                    LyricDissolveEffect.UNKNOWN_LINE, true);
         } else {
-            float marqueeOffset = drawCompactMarqueeKaraoke(canvas, snapshot,
-                    currentText(snapshot), lyricLeft,
-                    baseline, lyricSize, lyricWidth, density,
-                    lyricColor(withAlpha(primaryText, 120)), lyricColor(primaryText));
-            if (showTranslation) {
-                drawCompactFollowingTranslation(canvas, secondaryText, lyricLeft,
-                        secondaryBaseline, secondaryLineSize, lyricWidth, marqueeOffset,
-                        lyricColor(withAlpha(primaryText, 165)));
-            }
+            drawCompactCurrentLine(canvas, snapshot, density, lyricLeft, lyricWidth, baseline,
+                    lyricSize, secondaryBaseline, secondaryLineSize, secondaryText,
+                    showTranslation, lyricColor(withAlpha(primaryText, 120)),
+                    lyricColor(primaryText), lyricColor(withAlpha(primaryText, 165)));
         }
         if (showBars) {
             drawCompactPlaybackBars(canvas, snapshot, lyricLeft, barsTop,
@@ -1603,6 +1673,61 @@ final class LyricsPanelView extends View {
                     AppPreferences.compactSpectrumColor(getContext(), secondary));
         }
         canvas.restoreToCount(save);
+    }
+
+    /**
+     * Where the eraser currently is on the line that is leaving, or {@link Float#NaN} when that
+     * line is not dissolving. Measured with the exact size and layout the ghost is drawn with,
+     * which for the strip is the size the line really had — never a shrunk one.
+     */
+    private float previousLineEraseFront(String value, float anchorX, float y, float size,
+                                         float maxWidth, int style, Paint.Align align) {
+        if (!previousLyricDissolve.affects(LyricDissolveEffect.UNKNOWN_LINE)) return Float.NaN;
+        setTextPaintForValue(size, style, value);
+        paint.setTextAlign(Paint.Align.LEFT);
+        String text = ellipsize(value.replace('\n', ' '), maxWidth);
+        float left = align == Paint.Align.CENTER ? anchorX - paint.measureText(text) * .5f : anchorX;
+        int charCount = text.codePointCount(0, text.length());
+        float cursor = 0f;
+        int charIndex = 0;
+        for (int offset = 0; offset < text.length(); ) {
+            int glyphChars = Character.charCount(text.codePointAt(offset));
+            if (charIndex >= charCount) break;
+            if (previousLyricDissolve.characterAlpha(LyricDissolveEffect.UNKNOWN_LINE, charIndex,
+                    charCount) > LyricDissolveEffect.VISIBLE_ALPHA) {
+                return left + cursor;
+            }
+            cursor += paint.measureText(text.substring(offset, offset + glyphChars));
+            offset += glyphChars;
+            charIndex++;
+        }
+        return left + paint.measureText(text);
+    }
+
+    /** The current row of the compact strip: the sung line plus whatever sits under it. */
+    private void drawCompactCurrentLine(Canvas canvas, MusicSnapshot snapshot, float density,
+                                        float lyricLeft, float lyricWidth, float baseline,
+                                        float lyricSize, float secondaryBaseline,
+                                        float secondaryLineSize, String secondaryText,
+                                        boolean showTranslation, int baseColor, int activeColor,
+                                        int translationColor) {
+        if (snapshot.lyrics.interlude) {
+            compactMarqueeActive = false;
+            compactMarqueeText = "";
+            compactMarqueeElapsedMs = 0L;
+            float dotRadius = lyricSize * 0.20f;
+            float dotWidth = interludeDotsWidth(dotRadius);
+            drawInterludeDots(canvas, snapshot, lyricLeft + (lyricWidth - dotWidth) * 0.5f,
+                    baseline - lyricSize * 0.72f, dotRadius, activeColor);
+            return;
+        }
+        float marqueeOffset = drawCompactMarqueeKaraoke(canvas, snapshot,
+                currentText(snapshot), lyricLeft, baseline, lyricSize, lyricWidth, density,
+                baseColor, activeColor);
+        if (showTranslation) {
+            drawCompactFollowingTranslation(canvas, secondaryText, lyricLeft, secondaryBaseline,
+                    secondaryLineSize, lyricWidth, marqueeOffset, translationColor);
+        }
     }
 
     /** Draws real FFT bands when permitted, otherwise the user-selected virtual or static mode. */
@@ -1753,7 +1878,22 @@ final class LyricsPanelView extends View {
         int save = canvas.save();
         canvas.clipRect(x, y - requestedSize * 1.25f, x + maxWidth, y + requestedSize * 0.35f);
         float drawX = x - offset;
+        // The ending highlight is a glow under the glyphs, so it goes first.
+        drawTrailingGlowInLine(canvas, snapshot.lyricAvailable ? snapshot.lyrics : null, text,
+                drawX, y, requestedSize, activeColor);
+        // 逐字歌词及时擦除 has to work here too: this path scrolls a long single line sideways
+        // instead of going through drawKaraoke(), so the sung prefix is withheld with a clip in
+        // the scrolled coordinate space, which keeps the eraser glued to its own glyphs.
+        long lineId = snapshot.lyrics.lineStartMs;
+        float sungWidth = sungPrefixWidth(text, lineId);
+        int eraseSave = -1;
+        if (sungWidth > 0f) {
+            eraseSave = canvas.save();
+            canvas.clipRect(drawX + sungWidth, y - requestedSize * 1.25f, x + maxWidth,
+                    y + requestedSize * 0.35f);
+        }
         drawLyricText(canvas, text, drawX, y, requestedSize, baseColor);
+        if (eraseSave >= 0) canvas.restoreToCount(eraseSave);
         if (!snapshot.lyricAvailable || snapshot.lyrics.lyric.isEmpty()) {
             drawLyricOutline(canvas, text, drawX, y, requestedSize, activeColor, true);
             paint.setColor(activeColor);
@@ -1768,7 +1908,7 @@ final class LyricsPanelView extends View {
             LrcTimeline.At at = snapshot.lyrics;
             float highlightedWidth = karaokeHighlightWidth(text, at);
             int highlightSave = canvas.save();
-            canvas.clipRect(drawX, y - requestedSize * 1.25f,
+            canvas.clipRect(drawX + sungWidth, y - requestedSize * 1.25f,
                     drawX + Math.min(textWidth, highlightedWidth), y + requestedSize * 0.35f);
             drawLyricOutline(canvas, text, drawX, y, requestedSize, activeColor, true);
             paint.setColor(activeColor);
@@ -1779,9 +1919,8 @@ final class LyricsPanelView extends View {
             canvas.drawText(text, drawX, y, paint);
             paint.clearShadowLayer();
             canvas.restoreToCount(highlightSave);
-            drawTrailingAccentWord(canvas, at, text, drawX, y, requestedSize,
-                    Paint.Align.LEFT, activeColor);
         }
+        drawSungGhost(canvas, text, text, drawX, y, requestedSize, activeColor, lineId);
         canvas.restoreToCount(save);
         return offset;
     }
@@ -1849,6 +1988,7 @@ final class LyricsPanelView extends View {
                 ? Paint.Align.CENTER : Paint.Align.LEFT;
         float anchor = align == Paint.Align.CENTER ? columnWidth / 2f : textLeft;
         float y = cover.bottom + 18f * density * contentScale + titleSize;
+        drawingMetadata = true;
         drawRefinedText(canvas, snapshot.active ? snapshot.title : "等待音乐",
                 anchor, y, titleSize, primaryText, textWidth, align, Typeface.NORMAL, 255);
         y += metaSize * 1.55f;
@@ -1859,6 +1999,7 @@ final class LyricsPanelView extends View {
             drawRefinedText(canvas, snapshot.sourceName + sourceSuffix(snapshot), anchor, y,
                     metaSize * 0.88f, secondaryText, textWidth, align, Typeface.NORMAL, 145);
         }
+        drawingMetadata = false;
     }
 
     private void drawRefinedLyrics(Canvas canvas, MusicSnapshot snapshot, float density,
@@ -1949,6 +2090,11 @@ final class LyricsPanelView extends View {
             } else if (offset == 0) {
                 drawWrappedKaraoke(canvas, snapshot, currentText(snapshot), lineLeft, top,
                         fontSize, width, currentLyricColor(primaryText), 3);
+            } else if (offset == -1) {
+                drawWrappedTextDissolving(canvas, line.text, lineLeft, top, fontSize,
+                        withAlpha(inactiveLyricColor(secondaryText), Math.round(opacity * 255f)),
+                        width, refinedOriginalBold ? Typeface.BOLD : Typeface.NORMAL, 3,
+                        line.timeMs);
             } else {
                 drawWrappedText(canvas, line.text, lineLeft, top, fontSize,
                         withAlpha(inactiveLyricColor(secondaryText),
@@ -2024,6 +2170,265 @@ final class LyricsPanelView extends View {
 
     private int nextLyricColor(int color) {
         return withAlpha(color, Math.round(Color.alpha(color) * nextLyricOpacity / 100f));
+    }
+
+    /**
+     * Draws the dust left behind by the glyphs that already went. The glyphs own the schedule
+     * and the dust outlives them, so this only has to paint whatever is still in the air.
+     */
+    private void drawPreviousLyricDust(Canvas canvas, long nowMs) {
+        if (!previousLyricParticles) return;
+        // While the user scrolls the lyric sheet, leave the frame alone: no dust over it.
+        if (previousLyricDissolve.isBrowsing()) return;
+        int savedColor = paint.getColor();
+        Paint.Style savedStyle = paint.getStyle();
+        paint.setStyle(Paint.Style.FILL);
+        for (int slot = 0; slot < LyricDissolveEffect.DUST_CAPACITY; slot++) {
+            if (!previousLyricDissolve.dustAlive(slot, nowMs)) continue;
+            int dustColor = previousLyricDissolve.dustColor(slot);
+            int alpha = Math.round(previousLyricDissolve.dustAlpha(slot, nowMs)
+                    * Color.alpha(dustColor) / 255f);
+            if (alpha <= 0) continue;
+            paint.setColor(withAlpha(dustColor, alpha));
+            canvas.drawCircle(previousLyricDissolve.dustX(slot, nowMs),
+                    previousLyricDissolve.dustY(slot, nowMs),
+                    previousLyricDissolve.dustRadius(slot, nowMs), paint);
+        }
+        paint.setColor(savedColor);
+        paint.setStyle(savedStyle);
+    }
+
+    /**
+     * One glyph of a dissolving line: same outline-then-fill treatment as
+     * {@link #drawLyricText}, but tinted with that glyph's own alpha.
+     */
+    private void drawDissolvingGlyph(Canvas canvas, String line, String glyph, float x, float y,
+                                     float size, int resolvedColor) {
+        if (shouldOutlineLyric(line, false)) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(outlineStrokeWidth(size, inactiveLyricOutlineWidthPercent));
+            paint.setColor(outlineStrokeColor(resolvedColor, false));
+            canvas.drawText(glyph, x, y, paint);
+            paint.setStyle(Paint.Style.FILL);
+        }
+        paint.setColor(resolvedColor);
+        canvas.drawText(glyph, x, y, paint);
+    }
+
+    /**
+     * Walks one drawn line glyph by glyph. Each glyph fades on its own clock and, once it has
+     * started, reports its box so the dust leaves from the character that is actually going.
+     *
+     * @return the character index the next chunk should continue from
+     */
+    /**
+     * One glyph of a line that is still the current line: the outline and glow the singer just
+     * had, not the muted "previous line" treatment.
+     */
+    private void drawActiveGlyph(Canvas canvas, String line, String glyph, float x, float y,
+                                 float size, int color) {
+        if (shouldOutlineLyric(line, true)) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(outlineStrokeWidth(size, currentLyricOutlineWidthPercent));
+            paint.setColor(outlineStrokeColor(color, true));
+            canvas.drawText(glyph, x, y, paint);
+            paint.setStyle(Paint.Style.FILL);
+        }
+        paint.setColor(color);
+        if (usesRefinedVisualStyle()) applyRefinedTextEffect(size, color, Color.alpha(color));
+        canvas.drawText(glyph, x, y, paint);
+        paint.clearShadowLayer();
+    }
+
+    /**
+     * Width of the already-sung prefix of a single-line lyric, 0 when nothing has been erased.
+     * Only the line the erase belongs to is ever affected, so scrolling to another line shows it
+     * whole. The caller must have configured the paint for the line it is about to draw.
+     */
+    private float sungPrefixWidth(String text, long lineId) {
+        if (!previousLyricDissolve.isErasingWords(lineId) || text == null || text.isEmpty()) {
+            return 0f;
+        }
+        int sung = Math.min(previousLyricDissolve.sungUnits(lineId), text.length());
+        return sung <= 0 ? 0f : paint.measureText(text, 0, sung);
+    }
+
+    /** Width of the already-sung prefix inside one wrapped chunk. */
+    private float sungWidthInChunk(WrappedChunk chunk, long lineId) {
+        if (!previousLyricDissolve.isErasingWords(lineId)) return 0f;
+        int local = Math.min(chunk.text.length(),
+                previousLyricDissolve.sungUnits(lineId) - chunk.start);
+        return local <= 0 ? 0f : paint.measureText(chunk.text, 0, local);
+    }
+
+    /**
+     * Paints the units sitting in the erase zone — they are already sung, so they come apart
+     * with their own alpha and shed their dust from their own glyph boxes. UTF-16 units are
+     * walked in glyph-sized steps so a surrogate pair is never drawn as two broken halves.
+     */
+    private void drawErasingUnits(Canvas canvas, String line, String text, float left,
+                                  float baseline, float size, int color, int firstUnit,
+                                  int lastUnit, long lineId) {
+        float cursor = left;
+        for (int unit = firstUnit; unit < lastUnit && unit < text.length(); ) {
+            int glyphChars = Character.isHighSurrogate(text.charAt(unit)) && unit + 1 < text.length()
+                    ? 2 : 1;
+            String glyph = text.substring(unit, Math.min(text.length(), unit + glyphChars));
+            float advance = paint.measureText(glyph);
+            float alpha = previousLyricDissolve.currentLineAlpha(lineId, unit);
+            if (alpha > LyricDissolveEffect.VISIBLE_ALPHA) {
+                drawActiveGlyph(canvas, line, glyph, cursor, baseline, size,
+                        withAlpha(color, Math.round(Color.alpha(color) * alpha)));
+            }
+            if (alpha < 1f) {
+                // Dust is painted after the layout transforms are restored, so report the box
+                // in that final space.
+                canvas.getMatrix(dissolveBoxMatrix);
+                dissolveBoxRect.set(cursor, baseline - size * .78f, cursor + advance,
+                        baseline + size * .24f);
+                dissolveBoxMatrix.mapRect(dissolveBoxRect);
+                previousLyricDissolve.emitFromCurrentLine(lineId, unit, dissolveBoxRect.left,
+                        dissolveBoxRect.top, dissolveBoxRect.width(), dissolveBoxRect.height(),
+                        dissolveBoxMatrix.mapRadius(size), color);
+            }
+            cursor += advance;
+            unit += glyphChars;
+        }
+    }
+
+    /** The erase zone of a single-line lyric, drawn where the renderer stopped painting. */
+    private void drawSungGhost(Canvas canvas, String line, String text, float left, float baseline,
+                               float size, int color, long lineId) {
+        if (!previousLyricDissolve.isErasingWords(lineId)) return;
+        int sung = Math.min(previousLyricDissolve.sungUnits(lineId), text.length());
+        if (sung <= 0) return;
+        int first = previousLyricDissolve.firstVisibleUnit(lineId, 0, sung);
+        if (first >= sung) return;
+        drawErasingUnits(canvas, line, text, left + paint.measureText(text, 0, first), baseline,
+                size, color, first, sung, lineId);
+    }
+
+    /** The erase zone of one wrapped chunk of the line being sung. */
+    private void drawSungGhostChunk(Canvas canvas, String line, WrappedChunk chunk, float x,
+                                    float baseline, float size, int color, long lineId) {
+        if (!previousLyricDissolve.isErasingWords(lineId)) return;
+        int localEnd = Math.min(chunk.text.length(),
+                previousLyricDissolve.sungUnits(lineId) - chunk.start);
+        if (localEnd <= 0) return;
+        int first = previousLyricDissolve.firstVisibleUnit(lineId, chunk.start,
+                chunk.start + localEnd);
+        int firstLocal = Math.max(0, first - chunk.start);
+        if (firstLocal >= localEnd) return;
+        drawErasingUnits(canvas, line, chunk.text, x + paint.measureText(chunk.text, 0, firstLocal),
+                baseline, size, color, firstLocal, localEnd, lineId);
+    }
+
+    private int drawDissolvingGlyphs(Canvas canvas, String line, String text, float x, float y,
+                                     float size, int resolvedColor, long lineId,
+                                     int charIndexBase, int charCount, boolean currentStyle) {
+        paint.setTextAlign(Paint.Align.LEFT);
+        float cursor = x;
+        int charIndex = charIndexBase;
+        for (int offset = 0; offset < text.length(); ) {
+            int codePoint = text.codePointAt(offset);
+            int glyphChars = Character.charCount(codePoint);
+            String glyph = text.substring(offset, offset + glyphChars);
+            float advance = paint.measureText(glyph);
+            float alpha = previousLyricDissolve.characterAlpha(lineId, charIndex, charCount);
+            if (alpha > LyricDissolveEffect.VISIBLE_ALPHA) {
+                int glyphColor = withAlpha(resolvedColor,
+                        Math.round(Color.alpha(resolvedColor) * alpha));
+                if (currentStyle) {
+                    drawActiveGlyph(canvas, line, glyph, cursor, y, size, glyphColor);
+                } else {
+                    drawDissolvingGlyph(canvas, line, glyph, cursor, y, size, glyphColor);
+                }
+            }
+            if (alpha < 1f) {
+                // The layout may still have a scale or rotation on the canvas — the refined
+                // curve does by default. Dust is painted after those are restored, so report
+                // the glyph box in that final space or the dust misses the glyph it came from.
+                canvas.getMatrix(dissolveBoxMatrix);
+                dissolveBoxRect.set(cursor, y - size * .78f, cursor + advance, y + size * .24f);
+                dissolveBoxMatrix.mapRect(dissolveBoxRect);
+                previousLyricDissolve.emitFromCharacter(lineId, charIndex,
+                        dissolveBoxRect.left, dissolveBoxRect.top, dissolveBoxRect.width(),
+                        dissolveBoxRect.height(), dissolveBoxMatrix.mapRadius(size), resolvedColor);
+            }
+            cursor += advance;
+            offset += glyphChars;
+            charIndex++;
+        }
+        return charIndex;
+    }
+
+    /**
+     * Draws one line glyph by glyph so each glyph can fade on its own clock. The size is the
+     * final one: callers that shrink text to fit must do it themselves, so a ghost always
+     * matches the size its line was really drawn at.
+     *
+     * @return false when this line is not dissolving, so the caller can take its normal path
+     */
+    private boolean drawDissolvingLine(Canvas canvas, String value, float anchorX, float y,
+                                       float size, int color, float maxWidth, int style,
+                                       Paint.Align align, long lineId, boolean currentStyle) {
+        if (value == null || value.isEmpty()) return false;
+        if (!previousLyricDissolve.affects(lineId)) return false;
+        setTextPaintForValue(size, style, value);
+        paint.setTextAlign(Paint.Align.LEFT);
+        String text = ellipsize(value.replace('\n', ' '), maxWidth);
+        if (drawSplitSourceMetadata(canvas, text, anchorX, y, maxWidth, align, 255)) return true;
+        int resolved = resolveMetadataColor(value, color);
+        // Lay the finished string out, then let the glyphs eat into it from the left.
+        float left = align == Paint.Align.CENTER ? anchorX - paint.measureText(text) * .5f : anchorX;
+        drawDissolvingGlyphs(canvas, value, text, left, y, size, resolved, lineId, 0,
+                text.codePointCount(0, text.length()), currentStyle);
+        return true;
+    }
+
+    private void drawLeftDissolving(Canvas canvas, String value, float x, float y,
+                                    float requestedSize, int color, float maxWidth, int style,
+                                    long lineId) {
+        if (drawDissolvingLine(canvas, value, x, y,
+                fitSize(value, requestedSize, maxWidth, style), color, maxWidth, style,
+                Paint.Align.LEFT, lineId, false)) return;
+        drawLeft(canvas, value, x, y, requestedSize, color, maxWidth, style);
+    }
+
+    private void drawCenteredDissolving(Canvas canvas, String value, float y, float requestedSize,
+                                        int color, float maxWidth, int style, long lineId) {
+        if (drawDissolvingLine(canvas, value, getWidth() / 2f, y,
+                fitSize(value, requestedSize, maxWidth, style), color, maxWidth, style,
+                Paint.Align.CENTER, lineId, false)) return;
+        drawCentered(canvas, value, y, requestedSize, color, maxWidth, style);
+    }
+
+    private float drawWrappedTextDissolving(Canvas canvas, String value, float x, float top,
+                                            float size, int color, float maxWidth, int style,
+                                            int maxLines, long lineId) {
+        if (value == null || value.isEmpty()) return 0f;
+        if (!previousLyricDissolve.affects(lineId)) {
+            return drawWrappedText(canvas, value, x, top, size, color, maxWidth, style, maxLines);
+        }
+        android.graphics.MaskFilter maskFilter = paint.getMaskFilter();
+        setTextPaintForValue(size, style, value);
+        paint.setMaskFilter(maskFilter);
+        paint.setTextAlign(Paint.Align.LEFT);
+        int resolved = resolveMetadataColor(value, color);
+        List<WrappedChunk> chunks = wrapText(value.replace('\n', ' '), maxWidth, maxLines);
+        int total = 0;
+        for (int index = 0; index < chunks.size(); index++) {
+            String chunk = chunks.get(index).text;
+            total += chunk.codePointCount(0, chunk.length());
+        }
+        float lineHeight = size * 1.22f;
+        int charIndex = 0;
+        for (int index = 0; index < chunks.size(); index++) {
+            charIndex = drawDissolvingGlyphs(canvas, value, chunks.get(index).text, x,
+                    top + size + index * lineHeight, size, resolved, lineId, charIndex, total,
+                    false);
+        }
+        return chunks.size() * lineHeight;
     }
 
     private int adjacentLyricColor(int color, int offset) {
@@ -2355,6 +2760,7 @@ final class LyricsPanelView extends View {
 
         float metaLeft = cover.right + 13f * density * contentScale;
         float metaWidth = width - metaLeft - pad;
+        drawingMetadata = true;
         drawLeft(canvas, snapshot.active ? snapshot.title : "等待音乐", metaLeft,
                 cover.top + 20f * density * contentScale,
                 16f * density * contentScale * titleScale,
@@ -2369,6 +2775,7 @@ final class LyricsPanelView extends View {
                     9.5f * density * contentScale * titleScale,
                     0x985A5148, metaWidth, Typeface.NORMAL);
         }
+        drawingMetadata = false;
         float progressY = Math.max(cover.bottom + 11f * density * contentScale,
                 height * 0.38f);
         drawProgress(canvas, pad, progressY, width - pad, 2f * density * contentScale,
@@ -2377,10 +2784,10 @@ final class LyricsPanelView extends View {
         float lyricY = progressY + 34f * density * contentScale + browseVisualOffsetPx;
         float lyricWidth = width - pad * 2f;
         if (lyricLineCount >= 3) {
-            drawLeft(canvas, snapshot.lyrics.previousLyric, pad, lyricY,
+            drawLeftDissolving(canvas, snapshot.lyrics.previousLyric, pad, lyricY,
                     12f * density * contentScale * textScale,
                     inactiveLyricColor(0x705A5148), lyricWidth,
-                    Typeface.BOLD);
+                    Typeface.BOLD, LyricDissolveEffect.UNKNOWN_LINE);
             lyricY += 25f * density * contentScale;
         }
         float pipLyricSize = minimalStyleLyricSize(density) * (secondary ? 1.06f : 1f);
@@ -2431,27 +2838,33 @@ final class LyricsPanelView extends View {
                             12f * density * contentScale, 0xFF293442);
                     break;
                 case LyricsLayoutConfig.SOURCE:
+                    drawingMetadata = true;
                     if (showPlayerStatus) {
                         drawLeft(canvas, snapshot.sourceName + sourceSuffix(snapshot), x, y,
                                 10f * density * contentScale * textScale,
                                 0xC86EE7F2, maxWidth, Typeface.BOLD);
                     }
+                    drawingMetadata = false;
                     break;
                 case LyricsLayoutConfig.TITLE:
+                    drawingMetadata = true;
                     drawLeft(canvas, snapshot.active ? snapshot.title : "等待音乐", x, y,
                             17f * density * contentScale * titleScale, Color.WHITE,
                             maxWidth, Typeface.BOLD);
+                    drawingMetadata = false;
                     break;
                 case LyricsLayoutConfig.ARTIST:
+                    drawingMetadata = true;
                     drawLeft(canvas, snapshot.artist, x, y,
                             11f * density * contentScale * titleScale, 0xB8D4DCE7,
                             maxWidth, Typeface.NORMAL);
+                    drawingMetadata = false;
                     break;
                 case LyricsLayoutConfig.PREVIOUS:
-                    drawLeft(canvas, snapshot.lyrics.previousLyric, x, y,
+                    drawLeftDissolving(canvas, snapshot.lyrics.previousLyric, x, y,
                             12f * density * contentScale * textScale,
                             lyricColor(0x7FFFFFFF), maxWidth,
-                            Typeface.NORMAL);
+                            Typeface.NORMAL, LyricDissolveEffect.UNKNOWN_LINE);
                     break;
                 case LyricsLayoutConfig.CURRENT:
                     drawKaraoke(canvas, snapshot, currentText(snapshot), x, y,
@@ -2605,11 +3018,13 @@ final class LyricsPanelView extends View {
 
         coverRect.set(0f, 0f, coverSize, coverSize);
         drawCover(canvas, snapshot.albumArt, coverRect, o12, 0xFFD2C4B2);
+        drawingMetadata = true;
         drawLeft(canvas, snapshot.active ? snapshot.title : "等待音乐", textLeft, o60,
                 o55 * titleScale, text, Math.max(1f, width - textLeft - o15), Typeface.NORMAL);
         drawLeft(canvas, snapshot.artist, textLeft, o105,
                 o35 * titleScale, text56, Math.max(1f, width - textLeft - o15),
                 Typeface.NORMAL);
+        drawingMetadata = false;
 
         String time = formatClock(snapshot.positionMs) + " / " + formatClock(snapshot.durationMs);
         setTextPaint(o30, Typeface.NORMAL);
@@ -2707,7 +3122,8 @@ final class LyricsPanelView extends View {
         canvas.clipRect(left, baseline - size * 1.25f, right, baseline + size * 0.35f);
         setTextPaintForValue(size, Typeface.BOLD, value);
         paint.setTextAlign(Paint.Align.LEFT);
-        paint.setColor(resolveMetadataColor(value, color));
+        // Despite the name this draws the surrounding lyric lines, never the source metadata.
+        paint.setColor(color);
         canvas.drawText(value.replace('\n', ' '), left, baseline, paint);
         canvas.restoreToCount(save);
     }
@@ -2944,12 +3360,31 @@ final class LyricsPanelView extends View {
         for (int i = 0; i < chunks.size(); i++) {
             WrappedChunk chunk = chunks.get(i);
             float baseline = top + size + i * lineHeight;
+            float chunkWidth = paint.measureText(chunk.text);
+            // 逐字歌词及时擦除: the sung part of this chunk is withheld, then repainted by
+            // drawSungGhostChunk() while it comes apart.
+            float sung = Math.min(chunkWidth, sungWidthInChunk(chunk, snapshot.lyrics.lineStartMs));
+            int eraseClip = -1;
+            if (sung > 0f) {
+                if (sung >= chunkWidth) {
+                    drawSungGhostChunk(canvas, value, chunk, x, baseline, size, activeColor, snapshot.lyrics.lineStartMs);
+                    continue;
+                }
+                eraseClip = canvas.save();
+                canvas.clipRect(x + sung, baseline - size * 1.18f, x + chunkWidth,
+                        baseline + size * 0.30f);
+            }
+            drawTrailingGlowInChunk(canvas, at, chunk, x, baseline, size, activeColor);
             drawLyricText(canvas, chunk.text, x, baseline, size, withAlpha(activeColor, 105));
             float activeWidth = at == null ? paint.measureText(chunk.text)
                     : karaokeHighlightWidth(chunk, at);
-            if (activeWidth <= 0f) continue;
+            if (activeWidth <= sung) {
+                if (eraseClip >= 0) canvas.restoreToCount(eraseClip);
+                drawSungGhostChunk(canvas, value, chunk, x, baseline, size, activeColor, snapshot.lyrics.lineStartMs);
+                continue;
+            }
             int save = canvas.save();
-            canvas.clipRect(x, baseline - size * 1.18f,
+            canvas.clipRect(x + Math.max(0f, sung), baseline - size * 1.18f,
                     x + activeWidth, baseline + size * 0.30f);
             drawLyricOutline(canvas, chunk.text, x, baseline, size, activeColor, true);
             paint.setColor(activeColor);
@@ -2960,7 +3395,8 @@ final class LyricsPanelView extends View {
             canvas.drawText(chunk.text, x, baseline, paint);
             paint.clearShadowLayer();
             canvas.restoreToCount(save);
-            drawTrailingAccentChunk(canvas, at, chunk, x, baseline, size, activeColor);
+            if (eraseClip >= 0) canvas.restoreToCount(eraseClip);
+            drawSungGhostChunk(canvas, value, chunk, x, baseline, size, activeColor, snapshot.lyrics.lineStartMs);
         }
         return chunks.size() * lineHeight;
     }
@@ -2987,16 +3423,32 @@ final class LyricsPanelView extends View {
         for (int i = 0; i < chunks.size(); i++) {
             WrappedChunk chunk = chunks.get(i);
             float baseline = top + size + i * lineHeight;
+            float chunkWidth = paint.measureText(chunk.text);
+            // 逐字歌词及时擦除: the sung part of this chunk is withheld, including the
+            // completed-word highlight that would otherwise paint it back in.
+            float sung = Math.min(chunkWidth, sungWidthInChunk(chunk, snapshot.lyrics.lineStartMs));
+            if (sung >= chunkWidth && sung > 0f) {
+                drawSungGhostChunk(canvas, value, chunk, x, baseline, size, activeColor, snapshot.lyrics.lineStartMs);
+                continue;
+            }
+            int eraseClip = -1;
+            if (sung > 0f) {
+                eraseClip = canvas.save();
+                canvas.clipRect(x + sung, baseline - size * 1.18f, x + chunkWidth,
+                        baseline + size * 0.30f);
+            }
+            drawTrailingGlowInChunk(canvas, at, chunk, x, baseline, size, activeColor);
             drawLyricText(canvas, chunk.text, x, baseline, size, withAlpha(activeColor, 76));
             drawAmllHighlightRange(canvas, chunk, x, baseline, size,
                     0, completedEnd, completedEnd, 0f,
                     activeColor, 235, 0f, false);
+            if (eraseClip >= 0) canvas.restoreToCount(eraseClip);
             drawAmllHighlightRange(canvas, chunk, x, baseline, size,
                     completedEnd,
                     Math.min(value.length(), completedEnd + boundary.completeEnd),
                     Math.min(value.length(), completedEnd + boundary.partialEnd),
                     boundary.partialFraction, activeColor, 255, 0f, true);
-            drawTrailingAccentChunk(canvas, at, chunk, x, baseline, size, activeColor);
+            drawSungGhostChunk(canvas, value, chunk, x, baseline, size, activeColor, snapshot.lyrics.lineStartMs);
         }
         return chunks.size() * lineHeight;
     }
@@ -3106,7 +3558,22 @@ final class LyricsPanelView extends View {
         String text = ellipsize(value.replace('\n', ' '), maxWidth);
         float textWidth = paint.measureText(text);
         float left = align == Paint.Align.CENTER ? anchorX - textWidth / 2f : anchorX;
-        drawLyricText(canvas, text, anchorX, y, size, baseColor);
+        // The ending highlight is a glow under the glyphs, so it is painted before them.
+        drawTrailingGlowInLine(canvas, snapshot.lyricAvailable ? snapshot.lyrics : null, text,
+                left, y, size, activeColor);
+        // With 逐字歌词及时擦除 the already-sung prefix is withheld here and repainted by
+        // drawSungGhost(), which is the only place a half-gone glyph is allowed to appear.
+        float sungWidth = Math.min(textWidth, sungPrefixWidth(text, snapshot.lyrics.lineStartMs));
+        if (sungWidth < textWidth) {
+            int baseSave = -1;
+            if (sungWidth > 0f) {
+                baseSave = canvas.save();
+                canvas.clipRect(left + sungWidth, y - size * 1.25f, left + textWidth,
+                        y + size * 0.35f);
+            }
+            drawLyricText(canvas, text, anchorX, y, size, baseColor);
+            if (baseSave >= 0) canvas.restoreToCount(baseSave);
+        }
         if (!snapshot.lyricAvailable || snapshot.lyrics.lyric.isEmpty()) return;
 
         LrcTimeline.At at = snapshot.lyrics;
@@ -3121,74 +3588,89 @@ final class LyricsPanelView extends View {
             return;
         }
         float highlightedWidth = karaokeHighlightWidth(text, at);
-        int save = canvas.save();
-        canvas.clipRect(left, y - size * 1.25f,
-                left + Math.min(textWidth, highlightedWidth), y + size * 0.35f);
-        drawLyricOutline(canvas, text, anchorX, y, size, activeColor, true);
-        paint.setColor(activeColor);
-        boolean glow = !usesRefinedVisualStyle() || refinedLyricGlow;
-        if (glow) {
-            paint.setShadowLayer(Math.max(4f, size * 0.35f), 0f, 0f,
-                    Color.argb(100, Color.red(activeColor), Color.green(activeColor),
-                            Color.blue(activeColor)));
+        if (highlightedWidth > sungWidth) {
+            int save = canvas.save();
+            canvas.clipRect(left + sungWidth, y - size * 1.25f,
+                    left + Math.min(textWidth, highlightedWidth), y + size * 0.35f);
+            drawLyricOutline(canvas, text, anchorX, y, size, activeColor, true);
+            paint.setColor(activeColor);
+            boolean glow = !usesRefinedVisualStyle() || refinedLyricGlow;
+            if (glow) {
+                paint.setShadowLayer(Math.max(4f, size * 0.35f), 0f, 0f,
+                        Color.argb(100, Color.red(activeColor), Color.green(activeColor),
+                                Color.blue(activeColor)));
+            }
+            canvas.drawText(text, anchorX, y, paint);
+            paint.clearShadowLayer();
+            canvas.restoreToCount(save);
         }
-        canvas.drawText(text, anchorX, y, paint);
-        paint.clearShadowLayer();
-        canvas.restoreToCount(save);
-        drawTrailingAccentWord(canvas, at, text, anchorX, y, size, align, activeColor);
+        drawSungGhost(canvas, value, text, left, y, size, activeColor, snapshot.lyrics.lineStartMs);
     }
 
-    /** A restrained, shared long-tail accent for every Canvas lyric style. */
-    private void drawTrailingAccentWord(Canvas canvas, LrcTimeline.At at, String text,
-                                        float anchorX, float baseline, float size,
-                                        Paint.Align align, int color) {
+    /**
+     * Refined Now Playing's ending highlight, transplanted: the held word is never restyled,
+     * recoloured or rescaled, it simply blooms. The glow is a blurred halo painted *under* the
+     * glyphs, so the word keeps its own colour, its karaoke split and its stroke, and no pixel
+     * is ever painted twice — which is what used to double the neighbours and blank the tail.
+     */
+    private void drawTrailingGlow(Canvas canvas, String word, float wordLeft, float baseline,
+                                  float size, int color, float wordProgress) {
+        if (word == null || word.isEmpty()) return;
+        float intensity = TrailingAccentEffect.intensity(wordProgress);
+        if (intensity <= 0f) return;
+        android.graphics.MaskFilter previousFilter = paint.getMaskFilter();
+        Paint.Style previousStyle = paint.getStyle();
+        int previousColor = paint.getColor();
+        Paint.Align previousAlign = paint.getTextAlign();
+        paint.setTextAlign(Paint.Align.LEFT);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(Math.max(2f, size * .34f));
+        paint.setColor(withAlpha(color, Math.round(205 * intensity)));
+        paint.setMaskFilter(blurMask(Math.max(3f, size * .5f)));
+        canvas.drawText(word, wordLeft, baseline, paint);
+        paint.setMaskFilter(previousFilter);
+        paint.setStyle(previousStyle);
+        paint.setColor(previousColor);
+        paint.setTextAlign(previousAlign);
+    }
+
+    /** Blooms the trailing word of a single-line lyric, before its glyphs are painted. */
+    private void drawTrailingGlowInLine(Canvas canvas, LrcTimeline.At at, String text, float left,
+                                        float baseline, float size, int color) {
         if (!trailingAccent || at == null || !at.trailingWord || at.currentWord.isEmpty()
                 || text == null || text.isEmpty()) return;
         int start = Math.min(text.length(), at.completedLyric.length());
         int end = Math.min(text.length(), start + at.currentWord.length());
         if (end <= start) return;
-        float textWidth = paint.measureText(text);
-        float left = align == Paint.Align.CENTER ? anchorX - textWidth * .5f
-                : align == Paint.Align.RIGHT ? anchorX - textWidth : anchorX;
-        float startX = left + paint.measureText(text, 0, start);
-        float endX = left + paint.measureText(text, 0, end);
-        drawTrailingAccentRange(canvas, text, anchorX, baseline, size, align,
-                startX, endX, color, at.wordProgressPermille / 1000f);
+        drawTrailingGlow(canvas, text.substring(start, end),
+                left + paint.measureText(text, 0, start), baseline, size, color,
+                at.wordProgressPermille / 1000f);
     }
 
-    private void drawTrailingAccentChunk(Canvas canvas, LrcTimeline.At at, WrappedChunk chunk,
+    /** Blooms the trailing word of one wrapped chunk, before that chunk's glyphs are painted. */
+    private void drawTrailingGlowInChunk(Canvas canvas, LrcTimeline.At at, WrappedChunk chunk,
                                          float x, float baseline, float size, int color) {
         if (!trailingAccent || at == null || !at.trailingWord || at.currentWord.isEmpty()) return;
         int start = at.completedLyric.length();
-        int end = start + at.currentWord.length();
-        if (chunk.end <= start || chunk.start >= end) return;
-        float startX = x + textWidthToGlobalIndex(chunk, start);
-        float endX = x + textWidthToGlobalIndex(chunk, end);
-        drawTrailingAccentRange(canvas, chunk.text, x, baseline, size, Paint.Align.LEFT,
-                startX, endX, color, at.wordProgressPermille / 1000f);
+        int[] range = trailingWordInChunk(chunk.start, chunk.text.length(), start,
+                start + at.currentWord.length());
+        if (range == null) return;
+        drawTrailingGlow(canvas, chunk.text.substring(range[0], range[1]),
+                x + paint.measureText(chunk.text, 0, range[0]), baseline, size, color,
+                at.wordProgressPermille / 1000f);
     }
 
-    private void drawTrailingAccentRange(Canvas canvas, String text, float anchorX,
-                                         float baseline, float size, Paint.Align align,
-                                         float startX, float endX, int color, float wordProgress) {
-        if (endX <= startX) return;
-        float progress = TrailingAccentEffect.intensity(wordProgress);
-        if (progress <= 0f) return;
-        float center = (startX + endX) * .5f;
-        int save = canvas.save();
-        canvas.clipRect(startX - size * .14f, baseline - size * 1.38f,
-                endX + size * .14f, baseline + size * .36f);
-        float scale = 1f + progress * .055f;
-        canvas.scale(scale, scale, center, baseline - size * .38f);
-        paint.setColor(withAlpha(color, Math.round(125 + 130 * progress)));
-        paint.setShadowLayer(Math.max(3f, size * (.22f + .28f * progress)), 0f, 0f,
-                withAlpha(color, Math.round(105 + 110 * progress)));
-        paint.setTextAlign(align);
-        canvas.drawText(text, anchorX, baseline, paint);
-        paint.clearShadowLayer();
-        canvas.restoreToCount(save);
+    /**
+     * Local {@code [start, end)} of the trailing word inside one wrapped chunk, or {@code null}
+     * when the word does not reach this chunk. The word can straddle a wrap boundary, in which
+     * case each chunk blooms only its own share of it.
+     */
+    static int[] trailingWordInChunk(int chunkStart, int chunkLength, int wordStart, int wordEnd) {
+        if (chunkLength <= 0 || wordEnd <= wordStart) return null;
+        int localStart = Math.max(0, wordStart - chunkStart);
+        int localEnd = Math.min(chunkLength, wordEnd - chunkStart);
+        return localEnd <= localStart ? null : new int[] { localStart, localEnd };
     }
-
 
     private float karaokeHighlightWidth(String text, LrcTimeline.At at) {
         if (text == null || text.isEmpty()) return 0f;
@@ -3267,9 +3749,24 @@ final class LyricsPanelView extends View {
         canvas.drawText(ellipsize(value.replace('\n', ' '), maxWidth), x, y, paint);
     }
 
+    /**
+     * Whether a line should be stroked. Lyric text follows the current / inactive lyric outline
+     * setting; panel metadata is never stroked.
+     */
+    private boolean shouldOutlineLyric(boolean current) {
+        return current ? currentLyricOutline : inactiveLyricOutline;
+    }
+
+    /**
+     * Stroke decision for a string that <em>might</em> be metadata. Only the metadata drawing
+     * paths may take this route: a lyric whose text happens to equal the song title is still a
+     * lyric, and matching on text alone used to strip its outline.
+     */
     private boolean shouldOutlineLyric(String value, boolean current) {
-        return (current ? currentLyricOutline : inactiveLyricOutline)
-                && value != null && !value.equals(frameTitle) && !value.equals(frameArtist)
+        if (!drawingMetadata) return shouldOutlineLyric(current);
+        return shouldOutlineLyric(current)
+                && value != null && !frameTitle.isEmpty() && !value.equals(frameTitle)
+                && !frameArtist.isEmpty() && !value.equals(frameArtist)
                 && !value.equals(frameSourceName) && !value.equals(frameLyricSourceName);
     }
 
@@ -3322,8 +3819,13 @@ final class LyricsPanelView extends View {
         return Math.max(requested * 0.62f, requested * maxWidth / measured);
     }
 
+    /**
+     * Metadata keeps its own colours. Lyric paths pass through here too, so anything that is not
+     * actually being drawn as panel metadata gets the caller's colour untouched — otherwise a
+     * lyric line that reads exactly like the song title would take the title colour.
+     */
     private int resolveMetadataColor(String value, int fallback) {
-        if (value == null || value.isEmpty()) return fallback;
+        if (!drawingMetadata || value == null || value.isEmpty()) return fallback;
         int selected = 0;
         if (!frameTitle.isEmpty() && value.equals(frameTitle)) selected = titleColor;
         else if (!frameArtist.isEmpty() && value.equals(frameArtist)) selected = artistColor;
@@ -3337,6 +3839,7 @@ final class LyricsPanelView extends View {
 
     private boolean drawSplitSourceMetadata(Canvas canvas, String value, float anchorX, float y,
                                             float maxWidth, Paint.Align align, int alpha) {
+        if (!drawingMetadata) return false;
         if ((playerColor == 0 && lyricSourceColor == 0) || frameSourceName.isEmpty()
                 || frameLyricSourceName.isEmpty() || value == null
                 || !value.startsWith(frameSourceName)) return false;
