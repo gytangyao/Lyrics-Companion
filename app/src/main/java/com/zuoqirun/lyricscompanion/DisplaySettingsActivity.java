@@ -87,6 +87,10 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
                 AppPreferences.previousLyricOpacity(this, secondary), "%",
                 value -> AppPreferences.putDisplayInt(this, secondary,
                         AppPreferences.KEY_PREVIOUS_LYRIC_OPACITY, value));
+        addToggle(panel, "显示播放器与歌词来源状态行", AppPreferences.KEY_SHOW_PLAYER_STATUS,
+                AppPreferences.showPlayerStatus(this, secondary));
+        addToggle(panel, "显示进度条", AppPreferences.KEY_SHOW_PROGRESS,
+                AppPreferences.showProgress(this, secondary));
         addToggle(panel, "平滑滚动换句", AppPreferences.KEY_SMOOTH_LYRIC_SCROLL,
                 AppPreferences.smoothLyricScroll(this, secondary));
         addToggle(panel, "尾部拖长音重音", AppPreferences.KEY_TRAILING_ACCENT,

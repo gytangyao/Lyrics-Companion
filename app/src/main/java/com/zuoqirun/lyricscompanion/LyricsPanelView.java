@@ -82,6 +82,8 @@ final class LyricsPanelView extends View {
     private float nextLyricScale = 0.70f;
     private int nextLyricOpacity = 100;
     private int previousLyricOpacity = 100;
+    private boolean showPlayerStatus = true;
+    private boolean showProgress = true;
     private boolean smoothLyricScroll = true;
     private int backgroundBlur;
     private int backgroundDim;
@@ -231,6 +233,8 @@ final class LyricsPanelView extends View {
         nextLyricScale = AppPreferences.nextLyricScale(getContext(), secondary) / 100f;
         nextLyricOpacity = AppPreferences.nextLyricOpacity(getContext(), secondary);
         previousLyricOpacity = AppPreferences.previousLyricOpacity(getContext(), secondary);
+        showPlayerStatus = AppPreferences.showPlayerStatus(getContext(), secondary);
+        showProgress = AppPreferences.showProgress(getContext(), secondary);
         smoothLyricScroll = AppPreferences.smoothLyricScroll(getContext(), secondary);
         backgroundBlur = AppPreferences.styleBlur(getContext(), secondary);
         backgroundDim = AppPreferences.styleDim(getContext(), secondary);
@@ -819,8 +823,10 @@ final class LyricsPanelView extends View {
                 + lyricSource : "歌词伴侣  ·  等待音乐";
         int classicTextSave = canvas.save();
         canvas.clipRect(0f, 0f, width, Math.max(1f, lyricClipBottom));
-        drawCentered(canvas, status, statusBaseline, 11f * density * classicTextScale * unit,
-                snapshot.playing ? 0xFF6EE7F2 : 0xFF8392A8, usableWidth, Typeface.BOLD);
+        if (showPlayerStatus) {
+            drawCentered(canvas, status, statusBaseline, 11f * density * classicTextScale * unit,
+                    snapshot.playing ? 0xFF6EE7F2 : 0xFF8392A8, usableWidth, Typeface.BOLD);
+        }
 
         drawCentered(canvas, snapshot.active ? snapshot.title : "打开音乐播放器并开始播放",
                 titleBaseline,
@@ -1135,8 +1141,10 @@ final class LyricsPanelView extends View {
         drawRefinedText(canvas, snapshot.artist, textLeft, y, metaSize,
                 secondaryText, textWidth, Paint.Align.LEFT, Typeface.NORMAL, 205);
         y += metaSize * 1.55f;
-        drawRefinedText(canvas, snapshot.sourceName + sourceSuffix(snapshot), textLeft, y,
-                metaSize, secondaryText, textWidth, Paint.Align.LEFT, Typeface.NORMAL, 145);
+        if (showPlayerStatus) {
+            drawRefinedText(canvas, snapshot.sourceName + sourceSuffix(snapshot), textLeft, y,
+                    metaSize, secondaryText, textWidth, Paint.Align.LEFT, Typeface.NORMAL, 145);
+        }
     }
 
     /** Immersive native interpretation of Apple Music-like Lyrics as a floating window. */
@@ -1847,8 +1855,10 @@ final class LyricsPanelView extends View {
         drawRefinedText(canvas, snapshot.artist, anchor, y, metaSize,
                 secondaryText, textWidth, align, Typeface.NORMAL, 205);
         y += metaSize * 1.38f;
-        drawRefinedText(canvas, snapshot.sourceName + sourceSuffix(snapshot), anchor, y,
-                metaSize * 0.88f, secondaryText, textWidth, align, Typeface.NORMAL, 145);
+        if (showPlayerStatus) {
+            drawRefinedText(canvas, snapshot.sourceName + sourceSuffix(snapshot), anchor, y,
+                    metaSize * 0.88f, secondaryText, textWidth, align, Typeface.NORMAL, 145);
+        }
     }
 
     private void drawRefinedLyrics(Canvas canvas, MusicSnapshot snapshot, float density,
@@ -2353,10 +2363,12 @@ final class LyricsPanelView extends View {
                 cover.top + 40f * density * contentScale,
                 11f * density * contentScale * titleScale, 0xB85A5148,
                 metaWidth, Typeface.NORMAL);
-        drawLeft(canvas, snapshot.sourceName + sourceSuffix(snapshot), metaLeft,
-                cover.top + 58f * density * contentScale,
-                9.5f * density * contentScale * titleScale,
-                0x985A5148, metaWidth, Typeface.NORMAL);
+        if (showPlayerStatus) {
+            drawLeft(canvas, snapshot.sourceName + sourceSuffix(snapshot), metaLeft,
+                    cover.top + 58f * density * contentScale,
+                    9.5f * density * contentScale * titleScale,
+                    0x985A5148, metaWidth, Typeface.NORMAL);
+        }
         float progressY = Math.max(cover.bottom + 11f * density * contentScale,
                 height * 0.38f);
         drawProgress(canvas, pad, progressY, width - pad, 2f * density * contentScale,
@@ -2419,9 +2431,11 @@ final class LyricsPanelView extends View {
                             12f * density * contentScale, 0xFF293442);
                     break;
                 case LyricsLayoutConfig.SOURCE:
-                    drawLeft(canvas, snapshot.sourceName + sourceSuffix(snapshot), x, y,
-                            10f * density * contentScale * textScale,
-                            0xC86EE7F2, maxWidth, Typeface.BOLD);
+                    if (showPlayerStatus) {
+                        drawLeft(canvas, snapshot.sourceName + sourceSuffix(snapshot), x, y,
+                                10f * density * contentScale * textScale,
+                                0xC86EE7F2, maxWidth, Typeface.BOLD);
+                    }
                     break;
                 case LyricsLayoutConfig.TITLE:
                     drawLeft(canvas, snapshot.active ? snapshot.title : "等待音乐", x, y,
@@ -2844,7 +2858,7 @@ final class LyricsPanelView extends View {
 
     private void drawProgress(Canvas canvas, float left, float top, float right, float height,
                               MusicSnapshot snapshot, int trackColor, int activeColor) {
-        if (right <= left) return;
+        if (!showProgress || right <= left) return;
         paint.setShader(null);
         paint.setStyle(Paint.Style.FILL);
         paint.setAlpha(255);

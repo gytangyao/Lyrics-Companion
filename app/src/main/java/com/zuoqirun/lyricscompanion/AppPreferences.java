@@ -39,6 +39,8 @@ final class AppPreferences {
     static final String KEY_NEXT_LYRIC_SCALE = "next_lyric_scale";
     static final String KEY_NEXT_LYRIC_OPACITY = "next_lyric_opacity";
     static final String KEY_PREVIOUS_LYRIC_OPACITY = "previous_lyric_opacity";
+    static final String KEY_SHOW_PLAYER_STATUS = "show_player_status";
+    static final String KEY_SHOW_PROGRESS = "show_progress";
     static final String KEY_LYRIC_COLOR = "lyric_color";
     static final String KEY_CURRENT_LYRIC_COLOR = "current_lyric_color";
     static final String KEY_INACTIVE_LYRIC_COLOR = "inactive_lyric_color";
@@ -387,6 +389,14 @@ final class AppPreferences {
     static int previousLyricOpacity(Context context, boolean secondary) {
         return Math.max(0, Math.min(100,
                 displayInt(context, secondary, KEY_PREVIOUS_LYRIC_OPACITY, 100)));
+    }
+
+    static boolean showPlayerStatus(Context context, boolean secondary) {
+        return displayBoolean(context, secondary, KEY_SHOW_PLAYER_STATUS, true);
+    }
+
+    static boolean showProgress(Context context, boolean secondary) {
+        return displayBoolean(context, secondary, KEY_SHOW_PROGRESS, true);
     }
 
     /** Zero means that the selected overlay style keeps controlling lyric colors. */
