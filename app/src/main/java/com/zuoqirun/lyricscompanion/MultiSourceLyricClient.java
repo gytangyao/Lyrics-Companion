@@ -7,6 +7,7 @@ import android.util.Log;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 /** Uses the preferred catalog first, then checks each remaining catalog in order. */
 final class MultiSourceLyricClient {
@@ -68,9 +69,7 @@ final class MultiSourceLyricClient {
                 + " providers=" + plan.providers + " title=" + title + " artist=" + artist
                 + " durationMs=" + durationMs + " directMediaId="
                 + (!directMediaId(currentSource, currentSource, mediaId).isEmpty()));
-        List<LocalTrackQueryRules.Query> queries = new ArrayList<>();
-        queries.add(new LocalTrackQueryRules.Query(title, artist));
-        queries.addAll(LocalTrackQueryRules.fallbackQueries(currentSource, title, artist));
+        List<LocalTrackQueryRules.Query> queries = catalogQueries(currentSource, title, artist);
         MatchedLyricCache matchedCache = new MatchedLyricCache(appContext);
         // Read all allowed local results before issuing even the first catalog search.
         for (String provider : bypassMatchedCache ? java.util.Collections.<String>emptyList() : plan.providers) {
@@ -85,7 +84,7 @@ final class MultiSourceLyricClient {
         for (int queryIndex = 0; queryIndex < queries.size(); queryIndex++) {
             LocalTrackQueryRules.Query query = queries.get(queryIndex);
             if (queryIndex > 0) {
-                DiagnosticLog.record(appContext, "Lyrics", "local filename fallback index="
+                DiagnosticLog.record(appContext, "Lyrics", "fallback query index="
                         + queryIndex + " title=" + query.title + " artist=" + query.artist);
             }
             for (String provider : plan.providers) {
@@ -110,6 +109,64 @@ final class MultiSourceLyricClient {
             }
         }
         return Result.EMPTY;
+    }
+
+    /**
+     * Ordered lookup queries for one track: the player metadata first (index 0 keeps the direct
+     * media-id lookup), then filename-derived fallbacks, then Simplified-script variants for
+     * every candidate. This supports players that report Traditional metadata - Spotify being
+     * the common case - while mainland catalogs are indexed under Simplified titles.
+     */
+    static List<LocalTrackQueryRules.Query> catalogQueries(String source, String title,
+                                                          String artist) {
+        List<LocalTrackQueryRules.Query> queries = new ArrayList<>();
+        queries.add(new LocalTrackQueryRules.Query(title, artist));
+        for (LocalTrackQueryRules.Query fallback
+                : LocalTrackQueryRules.fallbackQueries(source, title, artist)) {
+            addQuery(queries, fallback.title, fallback.artist);
+        }
+        int originalQueryCount = queries.size();
+        for (int i = 0; i < originalQueryCount; i++) {
+            LocalTrackQueryRules.Query query = queries.get(i);
+            for (LocalTrackQueryRules.Query variant : scriptVariants(query.title, query.artist)) {
+                addQuery(queries, variant.title, variant.artist);
+            }
+        }
+        return queries;
+    }
+
+    /** Both fields converted first, then one field at a time; empty when the text is Simplified. */
+    private static List<LocalTrackQueryRules.Query> scriptVariants(String title, String artist) {
+        List<LocalTrackQueryRules.Query> variants = new ArrayList<>(3);
+        String simplifiedTitle = ChineseScriptConverter.toSimplified(title);
+        String simplifiedArtist = ChineseScriptConverter.toSimplified(artist);
+        boolean titleChanged = simplifiedTitle != null && !simplifiedTitle.equals(title);
+        boolean artistChanged = simplifiedArtist != null && !simplifiedArtist.equals(artist);
+        if (titleChanged && artistChanged) {
+            variants.add(new LocalTrackQueryRules.Query(simplifiedTitle, simplifiedArtist));
+        }
+        if (titleChanged) variants.add(new LocalTrackQueryRules.Query(simplifiedTitle, artist));
+        if (artistChanged) variants.add(new LocalTrackQueryRules.Query(title, simplifiedArtist));
+        return variants;
+    }
+
+    private static void addQuery(List<LocalTrackQueryRules.Query> queries, String title,
+                                 String artist) {
+        if (title == null || title.isEmpty()) return;
+        String key = queryKey(title, artist);
+        for (LocalTrackQueryRules.Query existing : queries) {
+            if (queryKey(existing.title, existing.artist).equals(key)) return;
+        }
+        queries.add(new LocalTrackQueryRules.Query(title, artist));
+    }
+
+    /** Case- and punctuation-insensitive identity, mirroring the fallback-query de-duplication. */
+    private static String queryKey(String title, String artist) {
+        return normalizeQueryText(title) + "|" + normalizeQueryText(artist);
+    }
+
+    private static String normalizeQueryText(String value) {
+        return value == null ? "" : value.toLowerCase(Locale.ROOT).replaceAll("[\\p{P}\\s]+", "");
     }
 
     private static String providerLabel(String provider) {
