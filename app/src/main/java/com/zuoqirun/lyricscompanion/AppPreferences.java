@@ -161,6 +161,8 @@ final class AppPreferences {
     static final String KEY_TOP_LYRIC_PARTICLE_AMOUNT = "top_lyric_particle_amount";
     static final String KEY_TOP_LYRIC_WORD_DISSOLVE = "top_lyric_word_dissolve";
     static final String KEY_TOP_LYRIC_PREVIOUS_OPACITY = "top_lyric_previous_opacity";
+    /** The screen the position joystick is pointed at, remembered across restarts. */
+    static final String KEY_JOYSTICK_SLOT = "joystick_slot";
     static final String KEY_BOTTOM_SPECTRUM = "bottom_spectrum";
     static final String KEY_BOTTOM_SPECTRUM_HEIGHT_DP = "bottom_spectrum_height_dp";
     static final String KEY_LOCAL_LYRIC_ENABLED = "local_lyric_enabled";
@@ -1359,6 +1361,15 @@ final class AppPreferences {
 
     static void setTopLyricInt(Context context, String key, int value) {
         get(context).edit().putInt(key, value).apply();
+    }
+
+    /** Which screen the position joystick moves while several of them show lyrics. */
+    static int joystickSlot(Context context) {
+        return get(context).getInt(KEY_JOYSTICK_SLOT, DisplaySlotRegistry.SECONDARY_SLOT);
+    }
+
+    static void setJoystickSlot(Context context, int slot) {
+        get(context).edit().putInt(KEY_JOYSTICK_SLOT, slot).apply();
     }
 
     static String lastFeedbackId(Context context) {

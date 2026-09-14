@@ -5,6 +5,7 @@ import android.annotation.SuppressLint;
 import android.content.ComponentName;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
@@ -28,6 +29,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.util.TypedValue;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.LinearLayout;
 import android.widget.ListView;
@@ -97,6 +99,12 @@ public final class MainActivity extends AppCompatActivity {
     /** Rows for the additional screens that can show lyrics at the same time as the main/secondary. */
     private LinearLayout extraDisplayHost;
     private LinearLayout extraDisplayDirectoryHost;
+    /** One style selector per extra screen, plus the buttons of its style-specific page. */
+    private LinearLayout extraStyleHost;
+    private final List<ExtraStyleRow> extraStyleRows = new ArrayList<>();
+    /** Which screen the position joystick moves; 副屏 until an extra screen is picked. */
+    private int joystickSlot = DisplaySlotRegistry.SECONDARY_SLOT;
+    private LinearLayout joystickTargetHost;
     private TextView updateStatus;
     private TextView onlineStatus;
     private TextView feedbackReplyStatus;
@@ -564,16 +572,24 @@ public final class MainActivity extends AppCompatActivity {
                 0xFF74869D, false);
         joystickHelp.setPadding(0, dp(4), 0, dp(4));
         screenCard.addView(joystickHelp);
+        // With several extra screens the joystick needs to know which one it is moving; with only
+        // the secondary it stays the plain joystick it always was.
+        joystickTargetHost = new LinearLayout(this);
+        joystickTargetHost.setOrientation(LinearLayout.VERTICAL);
+        screenCard.addView(joystickTargetHost);
         SecondaryPositionJoystickView joystick = new SecondaryPositionJoystickView(this);
-        joystick.setListener((dx, dy) -> LyricsDisplayService.moveSecondaryBy(this, dx, dy));
+        joystick.setListener((dx, dy) -> LyricsDisplayService.moveSecondaryBy(this, joystickSlot, dx, dy));
         LinearLayout.LayoutParams joystickParams = new LinearLayout.LayoutParams(dp(148), dp(148));
         joystickParams.gravity = Gravity.CENTER_HORIZONTAL;
         screenCard.addView(joystick, joystickParams);
 
         LinearLayout styleCard = card();
-        styleCard.addView(sectionLabel("主屏 / 副屏样式"));
-        addStyleSelector(styleCard, "主屏悬浮窗样式", false);
-        addStyleSelector(styleCard, "副屏歌词样式", true);
+        styleCard.addView(sectionLabel("主屏 / 副屏 / 其它屏幕样式"));
+        addStyleSelector(styleCard, "主屏悬浮窗样式", DisplaySlotRegistry.MAIN_SLOT);
+        addStyleSelector(styleCard, "副屏歌词样式", DisplaySlotRegistry.SECONDARY_SLOT);
+        extraStyleHost = new LinearLayout(this);
+        extraStyleHost.setOrientation(LinearLayout.VERTICAL);
+        styleCard.addView(extraStyleHost);
         MaterialButton fullscreenLyrics = button("全屏展示主屏样式", true);
         fullscreenLyrics.setOnClickListener(v -> startActivity(
                 new Intent(this, FullscreenLyricsActivity.class)));
@@ -1061,7 +1077,14 @@ public final class MainActivity extends AppCompatActivity {
         else finish();
     }
 
-    private void addStyleSelector(LinearLayout parent, String title, boolean secondary) {
+    /**
+     * One screen's style picker. Slot 0 is the main overlay, slot 1 the 副屏, and every further
+     * slot an extra screen, which reads and writes its own store through {@link DisplaySlotContext}.
+     */
+    private void addStyleSelector(LinearLayout parent, String title, int slot) {
+        final boolean secondary = slot > DisplaySlotRegistry.MAIN_SLOT;
+        final Context styleContext = slot >= DisplaySlotRegistry.FIRST_EXTRA_SLOT
+                ? new DisplaySlotContext(this, slot) : this;
         TextView label = text(title, 14, 0xFFD7E1EE, true);
         label.setPadding(0, dp(14), 0, dp(6));
         parent.addView(label);
@@ -1069,25 +1092,28 @@ public final class MainActivity extends AppCompatActivity {
         String[] values = {"refined", "amll", "default", "compact", "pip", "pure"};
         Spinner spinner = new Spinner(this, Spinner.MODE_DIALOG);
         spinner.setAdapter(new ThemedSpinnerAdapter<>(this, labels));
-        String saved = AppPreferences.overlayStyle(this, secondary);
+        String saved = AppPreferences.overlayStyle(styleContext, secondary);
         int selection = 0;
         for (int i = 0; i < values.length; i++) if (values[i].equals(saved)) selection = i;
         spinner.setSelection(selection, false);
         spinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(android.widget.AdapterView<?> parentView,
+            @Override public void onItemSelected(AdapterView<?> parentView,
                                                  View view, int position, long id) {
-                if (values[position].equals(AppPreferences.overlayStyle(MainActivity.this, secondary))) return;
-                AppPreferences.setOverlayStyle(MainActivity.this, secondary, values[position]);
+                if (values[position].equals(
+                        AppPreferences.overlayStyle(styleContext, secondary))) return;
+                AppPreferences.setOverlayStyle(styleContext, secondary, values[position]);
                 updateRefinedSettingsVisibility();
                 if (!secondary) refreshPreview();
                 AppPreferences.changed(MainActivity.this);
                 if (!secondary) recreate();
             }
-            @Override public void onNothingSelected(android.widget.AdapterView<?> parentView) { }
+            @Override public void onNothingSelected(AdapterView<?> parentView) { }
         });
         parent.addView(spinner, new LinearLayout.LayoutParams(-1, dp(52)));
         TextView help = text(secondary
-                        ? "副屏可独立选择样式。"
+                        ? (slot >= DisplaySlotRegistry.FIRST_EXTRA_SLOT
+                        ? "本屏样式只影响这块屏幕，与主屏、副屏互不影响。"
+                        : "副屏可独立选择样式。")
                         : "Refined、Apple Music-like Lyrics 和 PiPWindow 均为独立样式；经典样式保留原歌词伴侣默认布局。",
                 12, 0xFF74869D, false);
         help.setPadding(0, dp(5), 0, 0);
@@ -1110,6 +1136,24 @@ public final class MainActivity extends AppCompatActivity {
         if (secondaryCompactSettingsButton != null) {
             secondaryCompactSettingsButton.setVisibility("compact".equals(AppPreferences.overlayStyle(this, true))
                     ? View.VISIBLE : View.GONE);
+        }
+        for (ExtraStyleRow row : extraStyleRows) {
+            String style = AppPreferences.overlayStyle(new DisplaySlotContext(this, row.slot), true);
+            row.refined.setVisibility("refined".equals(style) ? View.VISIBLE : View.GONE);
+            row.compact.setVisibility("compact".equals(style) ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    /** One extra screen's style picker and the shortcuts that belong to the style it is on. */
+    private static final class ExtraStyleRow {
+        final int slot;
+        final MaterialButton refined;
+        final MaterialButton compact;
+
+        ExtraStyleRow(int slot, MaterialButton refined, MaterialButton compact) {
+            this.slot = slot;
+            this.refined = refined;
+            this.compact = compact;
         }
     }
 
@@ -1434,6 +1478,97 @@ public final class MainActivity extends AppCompatActivity {
                 extraDisplayDirectoryHost.addView(button, params);
             }
         }
+
+        refreshExtraStyleSelectors(entries);
+        refreshJoystickTarget(entries);
+    }
+
+    /**
+     * One style picker per extra screen, each writing into that screen's own store, plus the
+     * shortcut to its style-specific page while that style is selected.
+     */
+    private void refreshExtraStyleSelectors(List<DisplaySlotRegistry.Entry> entries) {
+        if (extraStyleHost == null) return;
+        extraStyleHost.removeAllViews();
+        extraStyleRows.clear();
+        for (int index = 0; index < entries.size(); index++) {
+            DisplaySlotRegistry.Entry entry = entries.get(index);
+            if (!entry.enabled) continue;
+            final int slot = DisplaySlotRegistry.slotFor(index);
+            String label = DisplaySlotRegistry.slotLabel(this, slot);
+            addStyleSelector(extraStyleHost, label + "样式", slot);
+
+            final Context styleContext = new DisplaySlotContext(this, slot);
+            MaterialButton refined = button(label + " Refined Now Playing 详细设置", false);
+            refined.setOnClickListener(v -> startActivity(
+                    new Intent(this, RefinedSettingsActivity.class)
+                            .putExtra(RefinedSettingsActivity.EXTRA_SECONDARY, true)
+                            .putExtra(DisplaySlotContext.EXTRA_SLOT, slot)));
+            LinearLayout.LayoutParams refinedParams = new LinearLayout.LayoutParams(-1, dp(50));
+            refinedParams.topMargin = dp(10);
+            extraStyleHost.addView(refined, refinedParams);
+
+            MaterialButton compact = button(label + "紧凑歌词详细设置", false);
+            compact.setOnClickListener(v -> startActivity(
+                    new Intent(this, CompactSettingsActivity.class)
+                            .putExtra(CompactSettingsActivity.EXTRA_SECONDARY, true)
+                            .putExtra(DisplaySlotContext.EXTRA_SLOT, slot)));
+            extraStyleHost.addView(compact, new LinearLayout.LayoutParams(-1, dp(50)));
+
+            MaterialButton display = button(label + "显示参数", false);
+            display.setOnClickListener(v -> openSlotSettings(slot));
+            LinearLayout.LayoutParams displayParams = new LinearLayout.LayoutParams(-1, dp(50));
+            displayParams.topMargin = dp(10);
+            extraStyleHost.addView(display, displayParams);
+
+            ExtraStyleRow row = new ExtraStyleRow(slot, refined, compact);
+            extraStyleRows.add(row);
+            String style = AppPreferences.overlayStyle(styleContext, true);
+            refined.setVisibility("refined".equals(style) ? View.VISIBLE : View.GONE);
+            compact.setVisibility("compact".equals(style) ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    /**
+     * The joystick moves one screen. With extra screens on, a picker says which one; the choice is
+     * written into the extras list so it survives a restart, and the label follows it.
+     */
+    private void refreshJoystickTarget(List<DisplaySlotRegistry.Entry> entries) {
+        if (joystickTargetHost == null) return;
+        joystickTargetHost.removeAllViews();
+        List<Integer> slots = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        slots.add(DisplaySlotRegistry.SECONDARY_SLOT);
+        labels.add("副屏 / 仪表盘");
+        for (int index = 0; index < entries.size(); index++) {
+            if (!entries.get(index).enabled) continue;
+            int slot = DisplaySlotRegistry.slotFor(index);
+            slots.add(slot);
+            labels.add(DisplaySlotRegistry.slotLabel(this, slot));
+        }
+        if (slots.size() == 1) {
+            joystickSlot = DisplaySlotRegistry.SECONDARY_SLOT;
+            return;
+        }
+        int saved = AppPreferences.joystickSlot(this);
+        int selection = 0;
+        for (int i = 0; i < slots.size(); i++) if (slots.get(i) == saved) selection = i;
+        joystickSlot = slots.get(selection);
+        TextView label = text("摇杆调整的屏幕", 13, 0xFF93A4B9, true);
+        label.setPadding(0, dp(10), 0, dp(4));
+        joystickTargetHost.addView(label);
+        Spinner spinner = new Spinner(this, Spinner.MODE_DIALOG);
+        spinner.setAdapter(new ThemedSpinnerAdapter<>(this, labels));
+        spinner.setSelection(selection, false);
+        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parentView, View view,
+                                                 int position, long id) {
+                joystickSlot = slots.get(position);
+                AppPreferences.setJoystickSlot(MainActivity.this, joystickSlot);
+            }
+            @Override public void onNothingSelected(AdapterView<?> parentView) { }
+        });
+        joystickTargetHost.addView(spinner, new LinearLayout.LayoutParams(-1, dp(48)));
     }
 
     private void addExtraDisplayRow(LinearLayout host, DisplaySlotRegistry.Entry entry, int index) {

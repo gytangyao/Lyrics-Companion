@@ -63,6 +63,8 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     private static final String EXTRA_VISIBLE = "visible";
     private static final String EXTRA_DX = "dx";
     private static final String EXTRA_DY = "dy";
+    /** Which screen a position nudge applies to; absent means the legacy secondary slot. */
+    private static final String EXTRA_SLOT = "slot";
 
     private DisplayManager displayManager;
     private WindowManager mainWindowManager;
@@ -167,9 +169,16 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         }
     }
 
+    /** Nudges the secondary screen's overlay (slot 1), which is what the joystick used to do. */
     static void moveSecondaryBy(Context context, int dx, int dy) {
+        moveSecondaryBy(context, DisplaySlotRegistry.SECONDARY_SLOT, dx, dy);
+    }
+
+    /** Nudges one screen's overlay: slot 1 is the 副屏, 2 and up are the extra screens. */
+    static void moveSecondaryBy(Context context, int slot, int dx, int dy) {
         startCommand(context, new Intent(context, LyricsDisplayService.class)
                 .setAction(ACTION_SECONDARY_POSITION)
+                .putExtra(EXTRA_SLOT, slot)
                 .putExtra(EXTRA_DX, dx).putExtra(EXTRA_DY, dy));
     }
 
@@ -283,7 +292,9 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                 + " secondary=" + AppPreferences.secondaryEnabled(this)
                 + " settingsVisible=" + settingsVisible);
         if (ACTION_SECONDARY_POSITION.equals(action)) {
-            applySecondaryDelta(intent.getIntExtra(EXTRA_DX, 0),
+            applySecondaryDelta(intent.getIntExtra(EXTRA_SLOT,
+                            DisplaySlotRegistry.SECONDARY_SLOT),
+                    intent.getIntExtra(EXTRA_DX, 0),
                     intent.getIntExtra(EXTRA_DY, 0));
             return START_STICKY;
         }
@@ -503,7 +514,11 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         recoveryHandler.postDelayed(secondaryRetry, delay);
     }
 
-    private void applySecondaryDelta(int dx, int dy) {
+    private void applySecondaryDelta(int slot, int dx, int dy) {
+        if (slot >= DisplaySlotRegistry.FIRST_EXTRA_SLOT) {
+            applyExtraDelta(slot, dx, dy);
+            return;
+        }
         if (secondaryWindowManager == null || secondaryPanel == null || secondaryParams == null
                 || secondaryDisplay == null) return;
         Point screen = displaySize(secondaryDisplay);
@@ -512,11 +527,34 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         secondaryParams.y = clamp(secondaryParams.y + dy, 0,
                 Math.max(0, screen.y - secondaryParams.height));
         String style = AppPreferences.overlayStyle(this, true);
-        AppPreferences.get(this).edit()
-                .putInt(AppPreferences.overlayPositionKey(true, style, true), secondaryParams.x)
-                .putInt(AppPreferences.overlayPositionKey(true, style, false), secondaryParams.y).apply();
+        AppPreferences.putOverlayPosition(this, true,
+                AppPreferences.overlayPositionKey(true, style, true), secondaryParams.x);
+        AppPreferences.putOverlayPosition(this, true,
+                AppPreferences.overlayPositionKey(true, style, false), secondaryParams.y);
         try { secondaryWindowManager.updateViewLayout(secondaryPanel, secondaryParams); }
         catch (Throwable error) { Log.w(TAG, "Unable to move secondary overlay", error); }
+    }
+
+    /**
+     * The same nudge for an extra screen. The window may not be up while its display is
+     * disconnected, in which case the joystick simply has nothing to move.
+     */
+    private void applyExtraDelta(int slot, int dx, int dy) {
+        for (ExtraOverlay overlay : extraOverlays) {
+            if (overlay.slot != slot) continue;
+            Point screen = displaySize(overlay.display);
+            overlay.params.x = clamp(overlay.params.x + dx, 0,
+                    Math.max(0, screen.x - overlay.params.width));
+            overlay.params.y = clamp(overlay.params.y + dy, 0,
+                    Math.max(0, screen.y - overlay.params.height));
+            AppPreferences.putOverlayPosition(overlay.context, true, overlay.xKey,
+                    overlay.params.x);
+            AppPreferences.putOverlayPosition(overlay.context, true, overlay.yKey,
+                    overlay.params.y);
+            try { overlay.windowManager.updateViewLayout(overlay.panel, overlay.params); }
+            catch (Throwable error) { Log.w(TAG, "Unable to move extra overlay", error); }
+            return;
+        }
     }
 
     private void attachDrag(View view, WindowManager manager, WindowManager.LayoutParams params,
