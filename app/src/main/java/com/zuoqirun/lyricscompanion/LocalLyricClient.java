@@ -16,7 +16,9 @@ import java.io.InputStream;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -38,6 +40,13 @@ final class LocalLyricClient {
             }
             if (sidecar != null && sidecar.isFile()) {
                 LrcTimeline found = parse(new FileInputStream(sidecar));
+                if (!found.isEmpty()) return found;
+            }
+        } catch (Throwable ignored) { }
+        try {
+            String embedded = readEmbeddedLyric(mediaUri, title);
+            if (!embedded.isEmpty()) {
+                LrcTimeline found = parseEmbeddedText(embedded);
                 if (!found.isEmpty()) return found;
             }
         } catch (Throwable ignored) { }
@@ -132,6 +141,22 @@ final class LocalLyricClient {
         } catch (Throwable ignored) { return ""; }
     }
 
+    private String readEmbeddedLyric(String mediaUri, String title) throws Exception {
+        if (TextUtils.isEmpty(mediaUri)) return "";
+        Uri uri = Uri.parse(mediaUri);
+        String name = queryName(uri);
+        if (name.isEmpty()) name = title;
+        if (ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())) {
+            return EmbeddedLyricReader.read(context.getContentResolver().openInputStream(uri), name);
+        }
+        String path = null;
+        if (ContentResolver.SCHEME_FILE.equals(uri.getScheme())) path = uri.getPath();
+        else if (uri.getScheme() == null || uri.getScheme().isEmpty()) path = mediaUri;
+        if (path == null || path.isEmpty()) return "";
+        return EmbeddedLyricReader.read(new FileInputStream(new File(path)),
+                name.isEmpty() ? path : name);
+    }
+
     private LrcTimeline searchDirectory(File root, Set<String> candidates) throws Exception {
         if (root == null || !root.isDirectory()) return LrcTimeline.EMPTY;
         ArrayDeque<File> directories = new ArrayDeque<>();
@@ -167,9 +192,33 @@ final class LocalLyricClient {
             }
             bytes = output.toByteArray();
         }
+        return parseText(bytes);
+    }
+
+    private static LrcTimeline parseText(String text) {
+        return LrcTimeline.parse(text, "");
+    }
+
+    /** Unsynchronised lyric tags still have useful line breaks; show them at a safe fixed pace. */
+    private static LrcTimeline parseEmbeddedText(String text) {
+        LrcTimeline timed = parseText(text);
+        if (!timed.isEmpty()) return timed;
+        String[] rawLines = text.replace('\r', '\n').split("\\n+");
+        List<LrcTimeline.Line> lines = new ArrayList<>();
+        long timeMs = 0L;
+        for (String rawLine : rawLines) {
+            String line = rawLine.trim();
+            if (line.isEmpty()) continue;
+            lines.add(new LrcTimeline.Line(timeMs, 5_000L, line));
+            timeMs += 5_000L;
+        }
+        return LrcTimeline.fromTimedLines(lines);
+    }
+
+    private static LrcTimeline parseText(byte[] bytes) {
         String text = new String(bytes, StandardCharsets.UTF_8);
         if (text.indexOf('\uFFFD') >= 0) text = new String(bytes, Charset.forName("GB18030"));
-        return LrcTimeline.parse(text, "");
+        return parseText(text);
     }
 
     private static String normalize(String value) {
