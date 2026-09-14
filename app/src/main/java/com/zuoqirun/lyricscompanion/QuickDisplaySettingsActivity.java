@@ -1,6 +1,7 @@
 package com.zuoqirun.lyricscompanion;
 
 import android.annotation.SuppressLint;
+import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -17,15 +18,22 @@ import com.google.android.material.shape.MaterialShapeDrawable;
 
 /** Only the adjustments a driver is likely to make repeatedly; expert parameters stay separate. */
 @SuppressLint("SetTextI18n")
-public final class QuickDisplaySettingsActivity extends AppCompatActivity {
+public final class QuickDisplaySettingsActivity extends AppCompatActivity implements DisplaySlotHost {
     static final String EXTRA_SECONDARY = "secondary";
 
     private boolean secondary;
+    private int displaySlot;
     private LyricsPanelView preview;
+
+    @Override public SharedPreferences displaySlotPreferences() {
+        return DisplaySlotContext.preferencesFor(this, displaySlot);
+    }
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         secondary = getIntent().getBooleanExtra(EXTRA_SECONDARY, false);
+        displaySlot = DisplaySlotContext.slotFrom(getIntent(), secondary);
+        secondary = displaySlot > DisplaySlotRegistry.MAIN_SLOT;
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -36,7 +44,7 @@ public final class QuickDisplaySettingsActivity extends AppCompatActivity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         MaterialToolbar toolbar = new MaterialToolbar(this);
-        toolbar.setTitle(secondary ? "副屏日常显示调整" : "主屏日常显示调整");
+        toolbar.setTitle(DisplaySlotRegistry.slotLabel(this, displaySlot) + "日常显示调整");
         toolbar.setSubtitle("只保留最常用的尺寸、字号和透明度");
         toolbar.setTitleTextColor(Color.WHITE);
         toolbar.setSubtitleTextColor(0xFFA9B6C8);

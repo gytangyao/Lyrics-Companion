@@ -14,6 +14,7 @@ import android.view.View;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.material.appbar.MaterialToolbar;
+import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.shape.MaterialShapeDrawable;
 
 /** Settings for the transparent lyric strip embedded around the system status area. */
@@ -68,6 +69,33 @@ public final class StatusLyricSettingsActivity extends AppCompatActivity {
         layout.addView(layoutNote);
         addCard(root, layout);
 
+        LinearLayout effects = card("歌词粒子与消散");
+        // The strip is its own display object: the dissolve family below is stored separately
+        // from the main screen, so tuning the main overlay no longer changes the strip.
+        final View[][] dependents = new View[1][];
+        MaterialSwitch particles = addToggle(effects, "本句结束粒子消散",
+                AppPreferences.KEY_TOP_LYRIC_PARTICLES, AppPreferences.topLyricParticles(this),
+                () -> setDependentVisibility(
+                        AppPreferences.topLyricParticles(this), dependents[0]));
+        View[] amountRow = addSeekRow(effects, "粒子量", 20, 300,
+                AppPreferences.topLyricParticleAmount(this), "%",
+                AppPreferences.KEY_TOP_LYRIC_PARTICLE_AMOUNT);
+        MaterialSwitch wordErase = addToggle(effects, "逐字歌词及时擦除",
+                AppPreferences.KEY_TOP_LYRIC_WORD_DISSOLVE,
+                AppPreferences.topLyricWordDissolve(this), null);
+        dependents[0] = new View[] { amountRow[0], amountRow[1], wordErase };
+        setDependentVisibility(particles.isChecked(), dependents[0]);
+        addSeek(effects, "上一句不透明度", 0, 100,
+                AppPreferences.topLyricPreviousOpacity(this), "%",
+                AppPreferences.KEY_TOP_LYRIC_PREVIOUS_OPACITY);
+        TextView effectsNote = text("顶部歌词条的粒子消散、粒子量、逐字擦除与上一句不透明度独立于主屏："
+                + "这里的改动不会影响主屏歌词，反之亦然。首次在本页调整前沿用主屏当前设置。",
+                12, 0xFF8392A8, false);
+        effectsNote.setLineSpacing(0f, 1.2f);
+        effectsNote.setPadding(0, dp(8), 0, 0);
+        effects.addView(effectsNote);
+        addCard(root, effects);
+
         LinearLayout background = card("背景样式");
         addBackgroundChoice(background);
         TextView backgroundNote = text("毛玻璃仅在系统实际启用跨窗口模糊时使用真实背景模糊；设备关闭或不支持时降级为浅色半透明玻璃，不再叠加黑色滤镜。紧凑单行背景保留封面柔化卡片。", 12,
@@ -92,6 +120,12 @@ public final class StatusLyricSettingsActivity extends AppCompatActivity {
 
     private void addSeek(LinearLayout parent, String title, int min, int max, int initial,
                          String suffix, String key) {
+        addSeekRow(parent, title, min, max, initial, suffix, key);
+    }
+
+    /** Same row, but the caller gets the views it needs to show or hide a dependent setting. */
+    private View[] addSeekRow(LinearLayout parent, String title, int min, int max, int initial,
+                              String suffix, String key) {
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(0, dp(12), 0, 0);
@@ -115,11 +149,25 @@ public final class StatusLyricSettingsActivity extends AppCompatActivity {
             @Override public void onStopTrackingTouch(SeekBar bar) { }
         });
         parent.addView(seek, new LinearLayout.LayoutParams(-1, dp(38)));
+        return new View[] { row, seek };
     }
 
-    private void addToggle(LinearLayout parent, String title, String key, boolean initial) {
-        com.google.android.material.materialswitch.MaterialSwitch toggle =
-                new com.google.android.material.materialswitch.MaterialSwitch(this);
+    /** Rows that only matter while the feature they belong to is on. */
+    private static void setDependentVisibility(boolean visible, View[] views) {
+        if (views == null) return;
+        for (View view : views) {
+            if (view != null) view.setVisibility(visible ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private MaterialSwitch addToggle(LinearLayout parent, String title, String key,
+                                     boolean initial) {
+        return addToggle(parent, title, key, initial, null);
+    }
+
+    private MaterialSwitch addToggle(LinearLayout parent, String title, String key,
+                                     boolean initial, Runnable afterChange) {
+        MaterialSwitch toggle = new MaterialSwitch(this);
         toggle.setText(title);
         toggle.setTextColor(0xFFF1F5FA);
         toggle.setPadding(0, dp(10), 0, 0);
@@ -129,8 +177,10 @@ public final class StatusLyricSettingsActivity extends AppCompatActivity {
             updatePreview();
             AudioSpectrumSource.sync(this);
             AppPreferences.changed(this);
+            if (afterChange != null) afterChange.run();
         });
         parent.addView(toggle);
+        return toggle;
     }
 
     private void addBackgroundChoice(LinearLayout parent) {

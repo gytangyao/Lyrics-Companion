@@ -74,15 +74,15 @@ final class MusicStateStore {
         String normalizedSource = TextUtils.isEmpty(newSource) ? "media" : newSource;
         String rawTitle = data.title;
         String rawArtist = data.artist;
-        String sodaDynamicTitle = "soda".equals(normalizedSource)
-                ? sodaTitleFromDynamicArtist(rawArtist) : "";
-        boolean sodaHasCompositeIdentity = !TextUtils.isEmpty(sodaDynamicTitle)
-                && !sameIdentityText(rawTitle, sodaDynamicTitle);
-        String newTitle = sodaHasCompositeIdentity ? sodaDynamicTitle : rawTitle;
-        String newArtist = sodaHasCompositeIdentity
-                ? sodaStableArtist(newTitle, rawArtist) : rawArtist;
+        String compositeTitle = readsTitleFromArtist(context, normalizedSource)
+                ? titleFromCompositeArtist(rawArtist) : "";
+        boolean hasCompositeIdentity = !TextUtils.isEmpty(compositeTitle)
+                && !sameIdentityText(rawTitle, compositeTitle);
+        String newTitle = hasCompositeIdentity ? compositeTitle : rawTitle;
+        String newArtist = hasCompositeIdentity
+                ? stableArtistFromComposite(newTitle, rawArtist) : rawArtist;
         String incomingLiveSessionLyric = data.sessionLyricPresent
-                ? data.sessionLyric : sodaHasCompositeIdentity ? rawTitle : "";
+                ? data.sessionLyric : hasCompositeIdentity ? rawTitle : "";
         String newMediaId = data.mediaId;
         Bitmap newAlbumArt = data.albumArt;
         String newAlbumArtUri = data.albumArtUri;
@@ -118,7 +118,7 @@ final class MusicStateStore {
                 newMediaId = mediaId;
                 newDuration = durationMs;
                 incomingLiveSessionLyric = "";
-            } else if (!sodaHasCompositeIdentity && shouldKeepLiveLyricTrackIdentity(
+            } else if (!hasCompositeIdentity && shouldKeepLiveLyricTrackIdentity(
                     normalizedSource, sameSource, title, newTitle,
                     artist, newArtist, durationMs, newDuration,
                     mediaId, newMediaId)) {
@@ -702,7 +702,7 @@ final class MusicStateStore {
         return titleChanged && !artistChanged && !durationChanged;
     }
 
-    static String sodaStableArtist(String stableTitle, String rawArtist) {
+    static String stableArtistFromComposite(String stableTitle, String rawArtist) {
         String titleValue = safe(stableTitle).trim();
         String artistValue = safe(rawArtist).trim();
         if (titleValue.isEmpty() || artistValue.length() <= titleValue.length()
@@ -710,18 +710,67 @@ final class MusicStateStore {
             return artistValue;
         }
         String suffix = artistValue.substring(titleValue.length()).trim();
-        if (suffix.matches("^[—–\\-·|:：,，].*")) {
-            return suffix.replaceFirst("^[—–\\-·|:：,，]+\\s*", "").trim();
+        if (suffix.matches("^[—–\\-·•|｜/:：,，].*")) {
+            return suffix.replaceFirst("^[—–\\-·•|｜/:：,，]+\\s*", "").trim();
         }
         return artistValue;
     }
 
-    static String sodaTitleFromDynamicArtist(String rawArtist) {
+    /**
+     * Separator shapes seen between the song name and the artist in a composite artist slot,
+     * grouped by how safe they are to split on and tried group by group, last match first.
+     */
+    private static final String[][] COMPOSITE_SEPARATORS = {
+            {" — ", " – ", " - "},
+            {"·", "•"},
+            {" | ", "｜"},
+            {"：", ":"},
+            {"/", "|", "-"},
+    };
+
+    /**
+     * The song name inside a composite artist slot such as {@code "稻香 - 周杰伦"} or
+     * {@code "稻香·周杰伦"}, or {@code ""} when the text carries no separator to split on.
+     *
+     * <p>A bare {@code -} or {@code /} is also how plenty of artist names are spelled ({@code
+     * A-Lin}, {@code AC/DC}, {@code Lo-Fi}), so those two only count as a separator when there is
+     * Chinese text around them — the "歌名-歌手" shape this exists for. Spaced hyphens and the
+     * remaining punctuation are unambiguous enough to split on as they are.
+     */
+    static String titleFromCompositeArtist(String rawArtist) {
         String value = safe(rawArtist).trim();
-        int separator = value.lastIndexOf(" — ");
-        if (separator < 1) separator = value.lastIndexOf(" – ");
-        if (separator < 1) separator = value.lastIndexOf(" - ");
-        return separator < 1 ? "" : value.substring(0, separator).trim();
+        for (String[] group : COMPOSITE_SEPARATORS) {
+            int index = -1;
+            String token = "";
+            for (String candidate : group) {
+                int found = value.lastIndexOf(candidate);
+                if (found >= 1 && found > index) {
+                    index = found;
+                    token = candidate;
+                }
+            }
+            if (index < 1) continue;
+            String title = value.substring(0, index).trim();
+            String artist = value.substring(index + token.length()).trim();
+            if (title.isEmpty() || artist.isEmpty()) continue;
+            if (isAmbiguousSeparator(token) && !containsHan(value)) continue;
+            return title;
+        }
+        return "";
+    }
+
+    /** A separator that is also common inside a single artist name. */
+    private static boolean isAmbiguousSeparator(String token) {
+        return "-".equals(token) || "/".equals(token) || "|".equals(token);
+    }
+
+    private static boolean containsHan(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character >= 0x4E00 && character <= 0x9FFF) return true;      // CJK Unified
+            if (character >= 0x3400 && character <= 0x4DBF) return true;      // Extension A
+        }
+        return false;
     }
 
     static boolean isLiveSessionLyricFallbackAvailable(String source, boolean loadFinished,
@@ -743,6 +792,20 @@ final class MusicStateStore {
         // Any MediaSession publisher may use title as its current lyric. The track-identity
         // checks above are intentionally source-neutral so this remains safe for unknown apps.
         return !TextUtils.isEmpty(source);
+    }
+
+    /**
+     * Whether a composite artist slot should be reparsed into the track identity.
+     *
+     * <p>汽水音乐 always does this — its observed metadata depends on it. For everything else the
+     * user opts in: the preference is for the channels whose title slot carries a lyric line,
+     * which is AVRCP and the generic MediaSession bucket unknown apps land in. Players with their
+     * own lyric channel keep the plain "title = song, artist = artist" mapping.
+     */
+    private static boolean readsTitleFromArtist(Context context, String source) {
+        if ("soda".equals(source)) return true;
+        if (!AppPreferences.compositeIdentityFromArtist(context)) return false;
+        return "bluetooth".equals(source) || "media".equals(source);
     }
 
     private static String liveSessionLyricSourceName(String source) {

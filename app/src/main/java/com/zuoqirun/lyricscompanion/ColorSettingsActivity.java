@@ -1,6 +1,7 @@
 package com.zuoqirun.lyricscompanion;
 
 import android.annotation.SuppressLint;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -17,13 +18,22 @@ import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.shape.MaterialShapeDrawable;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** The single entry point for every user-selectable overlay color. */
 @SuppressLint("SetTextI18n")
-public final class ColorSettingsActivity extends AppCompatActivity {
+public final class ColorSettingsActivity extends AppCompatActivity implements DisplaySlotHost {
     static final String EXTRA_SCOPE = "scope";
     private LinearLayout root;
     private LinearLayout colorHost;
     private int selectedScope;
+    /** Which screen the colors currently on show belong to; 0 for the top strip's own palette. */
+    private int displaySlot;
+
+    @Override public SharedPreferences displaySlotPreferences() {
+        return DisplaySlotContext.preferencesFor(this, displaySlot);
+    }
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -69,7 +79,18 @@ public final class ColorSettingsActivity extends AppCompatActivity {
 
         LinearLayout scope = card("编辑区域");
         Spinner spinner = new Spinner(this, Spinner.MODE_DIALOG);
-        String[] labels = {"主屏悬浮歌词", "副屏歌词", "顶部歌词条"};
+        // Scopes 0/1/2 keep their historical meaning; every further entry is one extra screen,
+        // whose own settings live in its own store (slot = scope - 1).
+        List<String> labelList = new ArrayList<>();
+        labelList.add("主屏悬浮歌词");
+        labelList.add("副屏歌词");
+        labelList.add("顶部歌词条");
+        List<DisplaySlotRegistry.Entry> extraEntries = DisplaySlotRegistry.entries(this);
+        for (int index = 0; index < extraEntries.size(); index++) {
+            labelList.add(DisplaySlotRegistry.slotLabel(this,
+                    DisplaySlotRegistry.slotFor(index)) + "颜色");
+        }
+        String[] labels = labelList.toArray(new String[0]);
         spinner.setAdapter(new ThemedSpinnerAdapter<>(this, labels));
         spinner.setSelection(Math.max(0, Math.min(labels.length - 1, selectedScope)), false);
         spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -111,12 +132,21 @@ public final class ColorSettingsActivity extends AppCompatActivity {
     private void rebuildColors() {
         if (root == null) return;
         if (colorHost != null) root.removeView(colorHost);
+        displaySlot = displaySlotForScope(selectedScope);
         colorHost = card(selectedScope == 0 ? "主屏颜色"
-                : selectedScope == 1 ? "副屏颜色" : "顶部歌词条颜色");
+                : selectedScope == 1 ? "副屏颜色"
+                : selectedScope == 2 ? "顶部歌词条颜色"
+                : DisplaySlotRegistry.slotLabel(this, displaySlot) + "颜色");
         if (selectedScope == 2) addStatusColors(colorHost);
-        else addDisplayColors(colorHost, selectedScope == 1);
+        else addDisplayColors(colorHost, selectedScope != 0);
         addCard(colorHost);
         CustomFontStore.applyToViewTree(this, colorHost);
+    }
+
+    /** The top strip has a palette of its own, so only real screens have a slot. */
+    private static int displaySlotForScope(int scope) {
+        if (scope <= DisplaySlotRegistry.SECONDARY_SLOT) return scope;
+        return scope == 2 ? DisplaySlotRegistry.MAIN_SLOT : scope - 1;
     }
 
     private void addDisplayColors(LinearLayout parent, boolean secondary) {

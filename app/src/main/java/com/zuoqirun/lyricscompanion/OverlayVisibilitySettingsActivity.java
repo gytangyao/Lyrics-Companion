@@ -163,7 +163,7 @@ public final class OverlayVisibilitySettingsActivity extends AppCompatActivity {
                 .show();
         APP_LIST_EXECUTOR.execute(() -> {
             List<InstalledAppListCache.AppChoice> apps = InstalledAppListCache.load(this,
-                    AppPreferences.hiddenOverlayApps(this));
+                    AppPreferences.hiddenOverlayApps(this), true);
             mainHandler.post(() -> {
                 if (loadingDialog.isShowing()) loadingDialog.dismiss();
                 if (isFinishing() || (Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;

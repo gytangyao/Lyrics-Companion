@@ -94,6 +94,9 @@ public final class MainActivity extends AppCompatActivity {
     private TextView permissionStatus;
     private TextView musicStatus;
     private TextView displayStatus;
+    /** Rows for the additional screens that can show lyrics at the same time as the main/secondary. */
+    private LinearLayout extraDisplayHost;
+    private LinearLayout extraDisplayDirectoryHost;
     private TextView updateStatus;
     private TextView onlineStatus;
     private TextView feedbackReplyStatus;
@@ -377,8 +380,9 @@ public final class MainActivity extends AppCompatActivity {
             MusicStateStore.reloadLyrics(this);
         });
         lyricCard.addView(playerCatalogFallback);
-        MaterialSwitch localLyrics = toggle("优先匹配本地 .lrc",
-                "在已授权的音乐目录中按歌曲文件名、歌名或“歌手 - 歌名”查找同目录歌词");
+        MaterialSwitch localLyrics = toggle("优先匹配本地歌词（.lrc / 内嵌标签）",
+                "先在音频文件旁查找同名 .lrc；没有时直接读取文件内嵌歌词（FLAC / MP3 / M4A / OGG），"
+                        + "最后才在已授权的音乐目录里按文件名、歌名或“歌手 - 歌名”搜索");
         localLyrics.setChecked(AppPreferences.localLyricEnabled(this));
         localLyrics.setOnCheckedChangeListener((button, checked) -> {
             AppPreferences.get(this).edit()
@@ -409,6 +413,16 @@ public final class MainActivity extends AppCompatActivity {
             }
         });
         lyricCard.addView(avrcp);
+        MaterialSwitch compositeIdentity = toggle("从歌手栏综合识别歌名（蓝牙/未知通道）",
+                "部分手机音乐 App 把实时歌词放进「歌名」栏、把「歌名 - 歌手」放进「歌手」栏，"
+                        + "导致按歌名搜词库必然失败。开启后先从歌手栏解析歌名再匹配，歌名栏原文"
+                        + "则作为实时歌词显示；解析不出时保持原样");
+        compositeIdentity.setChecked(AppPreferences.compositeIdentityFromArtist(this));
+        compositeIdentity.setOnCheckedChangeListener((button, checked) -> {
+            AppPreferences.get(this).edit()
+                    .putBoolean(AppPreferences.KEY_COMPOSITE_IDENTITY_FROM_ARTIST, checked).apply();
+        });
+        lyricCard.addView(compositeIdentity);
 
         LinearLayout outputCard = card();
         outputCard.addView(sectionLabel("歌词显示开关"));
@@ -527,6 +541,21 @@ public final class MainActivity extends AppCompatActivity {
         displayStatus = text("", 13, 0xFF8392A8, false);
         displayStatus.setPadding(0, dp(5), 0, 0);
         screenCard.addView(displayStatus);
+
+        // Beyond the main overlay and the one secondary there was no way to drive a second extra
+        // screen — a HUD next to the driving display, for instance. Any number of further
+        // displays can now be switched on here, each with its own parameters.
+        TextView extraLabel = text("其它屏幕同时显示", 13, 0xFF93A4B9, true);
+        extraLabel.setPadding(0, dp(18), 0, 0);
+        screenCard.addView(extraLabel);
+        TextView extraHelp = text("在「投屏屏幕」之外，还能让更多显示器各自显示歌词，各自一套样式、"
+                + "字号、位置与颜色。副屏选“自动选择”时建议先指定具体屏幕，避免同一块屏重复显示。",
+                12, 0xFF74869D, false);
+        extraHelp.setPadding(0, dp(4), 0, dp(6));
+        screenCard.addView(extraHelp);
+        extraDisplayHost = new LinearLayout(this);
+        extraDisplayHost.setOrientation(LinearLayout.VERTICAL);
+        screenCard.addView(extraDisplayHost);
 
         TextView joystickLabel = text("副屏位置微调", 13, 0xFF93A4B9, true);
         joystickLabel.setPadding(0, dp(16), 0, 0);
@@ -837,6 +866,10 @@ public final class MainActivity extends AppCompatActivity {
         screenRow.addView(secondary, secondaryParams);
         card.addView(screenRow);
 
+        extraDisplayDirectoryHost = new LinearLayout(this);
+        extraDisplayDirectoryHost.setOrientation(LinearLayout.VERTICAL);
+        card.addView(extraDisplayDirectoryHost);
+
         LinearLayout detailRow = new LinearLayout(this);
         detailRow.setOrientation(LinearLayout.HORIZONTAL);
         MaterialButton topLyric = button("顶部歌词条", false);
@@ -911,6 +944,13 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout.LayoutParams completeParams = new LinearLayout.LayoutParams(-1, dp(48));
         completeParams.topMargin = dp(8);
         card.addView(complete, completeParams);
+        // A HUD next to the driving display is a display-object question, so it lives with the
+        // per-display parameters rather than in the everyday card.
+        MaterialButton moreScreens = button("在更多屏幕上同时显示（HUD、后座屏等）", false);
+        moreScreens.setOnClickListener(v -> switchToCompleteDisplaySettings());
+        LinearLayout.LayoutParams moreScreensParams = new LinearLayout.LayoutParams(-1, dp(48));
+        moreScreensParams.topMargin = dp(8);
+        card.addView(moreScreens, moreScreensParams);
         return card;
     }
 
@@ -1333,6 +1373,7 @@ public final class MainActivity extends AppCompatActivity {
         });
         bindingUi = false;
         updateDisplayStatus(choices.size() - 1, choices.get(selection));
+        refreshExtraDisplayChoices();
     }
 
     private void updateDisplayStatus(int count, DisplayChoice selected) {
@@ -1341,6 +1382,150 @@ public final class MainActivity extends AppCompatActivity {
         } else {
             displayStatus.setText("检测到 " + count + " 块副屏 · 当前：" + selected.label);
         }
+    }
+
+    /**
+     * Rows for every connected non-default display plus any saved extra screen that is currently
+     * unplugged — the latter stay listed so they can be switched off or adjusted without having to
+     * reconnect them. A screen that is switched off keeps its place in the list, so the slots of
+     * the screens after it never move.
+     */
+    private void refreshExtraDisplayChoices() {
+        if (extraDisplayHost == null && extraDisplayDirectoryHost == null) return;
+        List<DisplaySlotRegistry.Entry> entries =
+                new ArrayList<>(DisplaySlotRegistry.entries(this));
+        List<Display> connected = new ArrayList<>();
+        DisplayManager manager = (DisplayManager) getSystemService(DISPLAY_SERVICE);
+        if (manager != null) {
+            for (Display display : manager.getDisplays()) {
+                if (display == null || display.getDisplayId() == Display.DEFAULT_DISPLAY) continue;
+                connected.add(display);
+            }
+        }
+
+        if (extraDisplayHost != null) {
+            extraDisplayHost.removeAllViews();
+            for (int index = 0; index < entries.size(); index++) {
+                addExtraDisplayRow(extraDisplayHost, entries.get(index), index);
+            }
+            for (Display display : connected) {
+                if (indexOfDisplay(entries, display) >= 0) continue;
+                addNewDisplayRow(extraDisplayHost, display);
+            }
+            if (extraDisplayHost.getChildCount() == 0) {
+                TextView empty = text("当前没有检测到其它屏幕；接入后会自动出现在这里。",
+                        12, 0xFF8392A8, false);
+                empty.setPadding(0, dp(6), 0, 0);
+                extraDisplayHost.addView(empty);
+            }
+        }
+
+        if (extraDisplayDirectoryHost != null) {
+            extraDisplayDirectoryHost.removeAllViews();
+            for (int index = 0; index < entries.size(); index++) {
+                DisplaySlotRegistry.Entry entry = entries.get(index);
+                if (!entry.enabled) continue;
+                int slot = DisplaySlotRegistry.slotFor(index);
+                MaterialButton button = button(DisplaySlotRegistry.slotLabel(this, slot) + "参数",
+                        false);
+                button.setOnClickListener(v -> openSlotSettings(slot));
+                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(48));
+                params.topMargin = dp(8);
+                extraDisplayDirectoryHost.addView(button, params);
+            }
+        }
+    }
+
+    private void addExtraDisplayRow(LinearLayout host, DisplaySlotRegistry.Entry entry, int index) {
+        Display display = findConnectedDisplay(entry);
+        String label = display != null ? display.getName() + "  ·  ID " + display.getDisplayId()
+                : entry.describe() + "（未连接）";
+        LinearLayout row = extraDisplayRow(label, entry.enabled,
+                checked -> setExtraDisplayEnabled(index, null, checked));
+        host.addView(row);
+        if (entry.enabled) {
+            int slot = DisplaySlotRegistry.slotFor(index);
+            MaterialButton params = button("调整“" + DisplaySlotRegistry.slotLabel(this, slot)
+                    + "”的样式与位置", false);
+            params.setOnClickListener(v -> openSlotSettings(slot));
+            LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(-1, dp(42));
+            buttonParams.topMargin = dp(2);
+            host.addView(params, buttonParams);
+        }
+    }
+
+    private void addNewDisplayRow(LinearLayout host, Display display) {
+        String label = display.getName() + "  ·  ID " + display.getDisplayId();
+        host.addView(extraDisplayRow(label + "（未显示歌词）", false,
+                checked -> setExtraDisplayEnabled(-1, display, checked)));
+    }
+
+    /** One screen row: its name plus the switch that turns its own overlay on or off. */
+    private LinearLayout extraDisplayRow(String label, boolean checked,
+                                         BooleanConsumer onChanged) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(4), 0, 0);
+        TextView name = text(label, 13, 0xFFD8E1EE, false);
+        row.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
+        MaterialSwitch toggle = new MaterialSwitch(this);
+        toggle.setChecked(checked);
+        toggle.setContentDescription(label);
+        toggle.setOnCheckedChangeListener((button, value) -> {
+            if (bindingUi) return;
+            onChanged.accept(value);
+        });
+        row.addView(toggle);
+        return row;
+    }
+
+    /**
+     * @param index   position of an existing entry, or -1 when {@code display} is being added
+     * @param display the connected screen being added, or null when switching an entry off
+     */
+    private void setExtraDisplayEnabled(int index, Display display, boolean enabled) {
+        List<DisplaySlotRegistry.Entry> entries =
+                new ArrayList<>(DisplaySlotRegistry.entries(this));
+        if (index >= 0 && index < entries.size()) {
+            entries.set(index, entries.get(index).withEnabled(enabled));
+        } else if (enabled && display != null) {
+            int existing = indexOfDisplay(entries, display);
+            if (existing >= 0) {
+                entries.set(existing, entries.get(existing).withEnabled(true));
+            } else {
+                entries.add(DisplaySlotRegistry.of(display));
+            }
+        }
+        DisplaySlotRegistry.putEntries(this, entries);
+        AppPreferences.changed(this);
+        refreshExtraDisplayChoices();
+        SafeToast.show(this, enabled ? "已在该屏幕显示歌词" : "已在该屏幕关闭歌词",
+                Toast.LENGTH_SHORT);
+    }
+
+    private Display findConnectedDisplay(DisplaySlotRegistry.Entry entry) {
+        DisplayManager manager = (DisplayManager) getSystemService(DISPLAY_SERVICE);
+        return DisplaySlotRegistry.resolve(entry, manager);
+    }
+
+    private static int indexOfDisplay(List<DisplaySlotRegistry.Entry> entries, Display display) {
+        for (int index = 0; index < entries.size(); index++) {
+            DisplaySlotRegistry.Entry entry = entries.get(index);
+            if (display.getDisplayId() == entry.displayId
+                    || display.getName().equals(entry.name)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    /** Opens the parameter page of one screen: 0 = 主屏, 1 = 副屏, 2+ = an extra screen. */
+    private void openSlotSettings(int slot) {
+        startActivity(new Intent(this, DisplaySettingsActivity.class)
+                .putExtra(DisplaySettingsActivity.EXTRA_SECONDARY,
+                        slot > DisplaySlotRegistry.MAIN_SLOT)
+                .putExtra(DisplaySlotContext.EXTRA_SLOT, slot));
     }
 
     private void addPlaybackControlToggles(LinearLayout parent) {
@@ -2578,5 +2763,8 @@ public final class MainActivity extends AppCompatActivity {
         DisplayChoice(int id, String label) { this.id = id; this.label = label; }
         @Override public String toString() { return label; }
     }
+
+    /** API 19 has no {@code java.util.function}, and this project does not desugar it. */
+    private interface BooleanConsumer { void accept(boolean value); }
 
 }

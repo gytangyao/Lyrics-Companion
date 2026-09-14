@@ -1,6 +1,7 @@
 package com.zuoqirun.lyricscompanion;
 
 import android.annotation.SuppressLint;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Point;
 import android.hardware.display.DisplayManager;
@@ -23,15 +24,23 @@ import com.google.android.material.shape.MaterialShapeDrawable;
 
 /** A focused parameter page for exactly one overlay display. */
 @SuppressLint("SetTextI18n")
-public final class DisplaySettingsActivity extends AppCompatActivity {
+public final class DisplaySettingsActivity extends AppCompatActivity implements DisplaySlotHost {
     static final String EXTRA_SECONDARY = "secondary";
 
     private boolean secondary;
+    /** Which screen this page edits: 0 = 主屏, 1 = 副屏, 2+ = an extra screen. */
+    private int displaySlot;
     private LyricsPanelView preview;
+
+    @Override public SharedPreferences displaySlotPreferences() {
+        return DisplaySlotContext.preferencesFor(this, displaySlot);
+    }
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         secondary = getIntent().getBooleanExtra(EXTRA_SECONDARY, false);
+        displaySlot = DisplaySlotContext.slotFrom(getIntent(), secondary);
+        secondary = displaySlot > DisplaySlotRegistry.MAIN_SLOT;
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -42,7 +51,7 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         MaterialToolbar toolbar = new MaterialToolbar(this);
-        toolbar.setTitle(secondary ? "副屏显示参数" : "主屏显示参数");
+        toolbar.setTitle(DisplaySlotRegistry.slotLabel(this, displaySlot) + "显示参数");
         toolbar.setSubtitle("仅影响当前屏幕，另一块屏幕不会改变");
         toolbar.setTitleTextColor(Color.WHITE);
         toolbar.setSubtitleTextColor(0xFFA9B6C8);
@@ -87,6 +96,12 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
                 AppPreferences.previousLyricOpacity(this, secondary), "%",
                 value -> AppPreferences.putDisplayInt(this, secondary,
                         AppPreferences.KEY_PREVIOUS_LYRIC_OPACITY, value));
+        addChoice(panel, "歌词水平对齐（经典 / 紧凑 / 纯净）",
+                new String[]{"跟随样式（默认）", "居中", "居左"},
+                new String[]{"", "center", "left"},
+                AppPreferences.lyricAlign(this, secondary),
+                value -> AppPreferences.putDisplayString(this, secondary,
+                        AppPreferences.KEY_LYRIC_ALIGN, value));
         // 粒子量 and 逐字歌词及时擦除 belong to the dissolve: they are only offered while it is
         // switched on, and go away with it. The holder exists because the master toggle is built
         // before the rows it controls.
@@ -113,7 +128,8 @@ public final class DisplaySettingsActivity extends AppCompatActivity {
                 AppPreferences.smoothLyricScroll(this, secondary));
         addToggle(panel, "尾部拖长音重音", AppPreferences.KEY_TRAILING_ACCENT,
                 AppPreferences.trailingAccent(this, secondary));
-        addToggle(panel, "锁定位置但仍可交互", AppPreferences.KEY_OVERLAY_POSITION_LOCKED,
+        addToggle(panel, "锁定位置并穿透（保留播放控制按键）",
+                AppPreferences.KEY_OVERLAY_POSITION_LOCKED,
                 AppPreferences.overlayPositionLocked(this, secondary));
         addTouchThroughToggle(panel);
         addSeek(panel, "歌词显示行数", 1, 7,

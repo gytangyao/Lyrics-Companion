@@ -1,6 +1,7 @@
 package com.zuoqirun.lyricscompanion;
 
 import android.annotation.SuppressLint;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -19,15 +20,22 @@ import com.google.android.material.shape.MaterialShapeDrawable;
 
 /** Display-scoped controls for the compact lyric presentation. */
 @SuppressLint("SetTextI18n")
-public final class CompactSettingsActivity extends AppCompatActivity {
+public final class CompactSettingsActivity extends AppCompatActivity implements DisplaySlotHost {
     static final String EXTRA_SECONDARY = "secondary";
     private boolean secondary;
+    private int displaySlot;
     private LyricsPanelView preview;
     private TextView spectrumStatus;
+
+    @Override public SharedPreferences displaySlotPreferences() {
+        return DisplaySlotContext.preferencesFor(this, displaySlot);
+    }
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         secondary = getIntent().getBooleanExtra(EXTRA_SECONDARY, false);
+        displaySlot = DisplaySlotContext.slotFrom(getIntent(), secondary);
+        secondary = displaySlot > DisplaySlotRegistry.MAIN_SLOT;
         // The launcher is intentionally conditional. Finishing here also prevents stale
         // shortcuts from editing a style that is no longer selected.
         if (!"compact".equals(AppPreferences.overlayStyle(this, secondary))) {
@@ -43,7 +51,7 @@ public final class CompactSettingsActivity extends AppCompatActivity {
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
         MaterialToolbar toolbar = new MaterialToolbar(this);
-        toolbar.setTitle((secondary ? "副屏" : "主屏") + "紧凑歌词详细设置");
+        toolbar.setTitle(DisplaySlotRegistry.slotLabel(this, displaySlot) + "紧凑歌词详细设置");
         toolbar.setSubtitle("本页设置只影响当前屏幕的紧凑歌词样式");
         toolbar.setTitleTextColor(Color.WHITE);
         toolbar.setSubtitleTextColor(0xFFA9B6C8);

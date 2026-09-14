@@ -52,7 +52,7 @@ final class AppChoiceListAdapter extends BaseAdapter {
         visibleApps.clear();
         for (InstalledAppListCache.AppChoice app : allApps) {
             if (normalized.isEmpty()
-                    || app.label.toLowerCase(Locale.ROOT).contains(normalized)
+                    || app.displayLabel().toLowerCase(Locale.ROOT).contains(normalized)
                     || app.packageName.toLowerCase(Locale.ROOT).contains(normalized)) {
                 visibleApps.add(app);
             }
@@ -95,11 +95,11 @@ final class AppChoiceListAdapter extends BaseAdapter {
         holder.icon.setImageResource(android.R.drawable.sym_def_app_icon);
         holder.icon.setTag(app.packageName);
         holder.iconLoading.setVisibility(View.VISIBLE);
-        holder.label.setText(app.label);
+        holder.label.setText(app.displayLabel());
         holder.packageLabel.setText(app.packageName);
         holder.check.setOnCheckedChangeListener(null);
         holder.check.setChecked(selected.contains(app.packageName));
-        holder.check.setContentDescription(app.label);
+        holder.check.setContentDescription(app.displayLabel());
         holder.check.setOnCheckedChangeListener((button, checked) -> {
             if (checked) selected.add(app.packageName); else selected.remove(app.packageName);
         });

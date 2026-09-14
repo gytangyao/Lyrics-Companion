@@ -276,15 +276,42 @@ public class MusicAppRegistryTest {
     }
 
     @Test public void parsesObservedSodaMetadataIntoStableTrackIdentity() {
-        assertEquals("Die For You", MusicStateStore.sodaTitleFromDynamicArtist(
+        assertEquals("Die For You", MusicStateStore.titleFromCompositeArtist(
                 "Die For You — VALORANT​, Grabbitz"));
-        assertEquals("VALORANT​, Grabbitz", MusicStateStore.sodaStableArtist(
+        assertEquals("VALORANT​, Grabbitz", MusicStateStore.stableArtistFromComposite(
                 "Die For You", "Die For You — VALORANT​, Grabbitz"));
-        assertEquals("蔡徐坤", MusicStateStore.sodaStableArtist(
+        assertEquals("蔡徐坤", MusicStateStore.stableArtistFromComposite(
                 "Deadman", "Deadman-蔡徐坤"));
-        assertEquals("Grabbitz", MusicStateStore.sodaStableArtist(
+        assertEquals("Grabbitz", MusicStateStore.stableArtistFromComposite(
                 "Die For You", "Grabbitz"));
-        assertEquals("", MusicStateStore.sodaTitleFromDynamicArtist("VALORANT​, Grabbitz"));
+        assertEquals("", MusicStateStore.titleFromCompositeArtist("VALORANT​, Grabbitz"));
+    }
+
+    /**
+     * The composite identity of #16: the car receives "歌名 - 歌手" in the artist slot, so the song
+     * name has to be lifted out of it — while artist names that merely contain a dash or a slash
+     * stay whole.
+     */
+    @Test public void parsesTheSongNameOutOfACompositeArtistSlot() {
+        assertEquals("稻香", MusicStateStore.titleFromCompositeArtist("稻香 - 周杰伦"));
+        assertEquals("稻香", MusicStateStore.titleFromCompositeArtist("稻香 — 周杰伦"));
+        assertEquals("稻香", MusicStateStore.titleFromCompositeArtist("稻香·周杰伦"));
+        assertEquals("稻香", MusicStateStore.titleFromCompositeArtist("稻香-周杰伦"));
+        assertEquals("稻香", MusicStateStore.titleFromCompositeArtist("稻香/周杰伦"));
+        assertEquals("稻香", MusicStateStore.titleFromCompositeArtist("稻香：周杰伦"));
+        assertEquals("", MusicStateStore.titleFromCompositeArtist("A-Lin"));
+        assertEquals("", MusicStateStore.titleFromCompositeArtist("AC/DC"));
+        assertEquals("", MusicStateStore.titleFromCompositeArtist("Lo-Fi Boy"));
+        assertEquals("", MusicStateStore.titleFromCompositeArtist("周杰伦"));
+        assertEquals("", MusicStateStore.titleFromCompositeArtist(""));
+    }
+
+    @Test public void compositeArtistSuffixIsCleanedOfEverySeparatorItCanCarry() {
+        assertEquals("周杰伦", MusicStateStore.stableArtistFromComposite("稻香", "稻香-周杰伦"));
+        assertEquals("周杰伦", MusicStateStore.stableArtistFromComposite("稻香", "稻香/周杰伦"));
+        assertEquals("周杰伦", MusicStateStore.stableArtistFromComposite("稻香", "稻香·周杰伦"));
+        assertEquals("周杰伦", MusicStateStore.stableArtistFromComposite("稻香", "稻香 — 周杰伦"));
+        assertEquals("周杰伦", MusicStateStore.stableArtistFromComposite("稻香", "周杰伦"));
     }
 
     @Test public void sodaLiveMetadataDisplaysWhileCatalogLookupContinues() {

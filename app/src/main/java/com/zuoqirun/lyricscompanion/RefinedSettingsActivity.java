@@ -1,6 +1,7 @@
 package com.zuoqirun.lyricscompanion;
 
 import android.annotation.SuppressLint;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -19,14 +20,21 @@ import com.google.android.material.shape.MaterialShapeDrawable;
 
 /** Native controls mirroring the visual settings exposed by Refined Now Playing. */
 @SuppressLint("SetTextI18n")
-public final class RefinedSettingsActivity extends AppCompatActivity {
+public final class RefinedSettingsActivity extends AppCompatActivity implements DisplaySlotHost {
     static final String EXTRA_SECONDARY = "secondary";
     private LyricsPanelView preview;
     private boolean secondary;
+    private int displaySlot;
+
+    @Override public SharedPreferences displaySlotPreferences() {
+        return DisplaySlotContext.preferencesFor(this, displaySlot);
+    }
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         secondary = getIntent().getBooleanExtra(EXTRA_SECONDARY, false);
+        displaySlot = DisplaySlotContext.slotFrom(getIntent(), secondary);
+        secondary = displaySlot > DisplaySlotRegistry.MAIN_SLOT;
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(0xFF07111F);
@@ -38,8 +46,8 @@ public final class RefinedSettingsActivity extends AppCompatActivity {
         MaterialToolbar toolbar = new MaterialToolbar(this);
         toolbar.setTitle("Refined 风格详细设置");
         toolbar.setSubtitle("按 BetterNCM 插件源码映射到原生 Canvas");
-        toolbar.setTitle((secondary ? "\u526f\u5c4f" : "\u4e3b\u5c4f")
-                + " Refined \u98ce\u683c\u8be6\u7ec6\u8bbe\u7f6e");
+        toolbar.setTitle(DisplaySlotRegistry.slotLabel(this, displaySlot)
+                + " Refined 风格详细设置");
         toolbar.setTitleTextColor(Color.WHITE);
         toolbar.setSubtitleTextColor(0xFFA9B6C8);
         toolbar.setNavigationIcon(android.R.drawable.ic_menu_close_clear_cancel);

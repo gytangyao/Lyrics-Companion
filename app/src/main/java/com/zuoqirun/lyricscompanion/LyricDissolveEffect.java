@@ -279,6 +279,23 @@ final class LyricDissolveEffect {
     }
 
     /**
+     * True while at least one glyph of this line is still on screen.
+     *
+     * <p>{@link #affects} answers "does this line belong to the effect", which stays true after it
+     * has come apart completely — {@code dissolvingLineId} is only dropped when the next line
+     * ends. Anything that draws <em>around</em> the dissolving line (the compact strip reveals the
+     * new line only behind the eraser) has to ask this instead, or it keeps reserving room for a
+     * line that is no longer there.
+     */
+    boolean hasVisibleCharacter(long lineId, int charCount) {
+        if (browsing) return true;
+        for (int index = 0; index < charCount; index++) {
+            if (characterAlpha(lineId, index, charCount) > VISIBLE_ALPHA) return true;
+        }
+        return false;
+    }
+
+    /**
      * The panel reports every glyph box while drawing the dissolving line. The first frame a
      * glyph is seen fading it sheds its dust; later frames only come back for the box.
      */

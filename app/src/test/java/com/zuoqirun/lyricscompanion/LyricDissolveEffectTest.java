@@ -67,6 +67,28 @@ public class LyricDissolveEffectTest {
         }
     }
 
+    /**
+     * The compact strip reveals the new line only to the left of the eraser. That clip must be
+     * dropped once the old line is gone, or a new line that is longer than the old one keeps its
+     * tail cut off at the old line's right edge for as long as the line stays current.
+     */
+    @Test public void aFinishedDissolveReportsNoVisibleGlyphsEvenThoughItStillAffectsTheLine() {
+        int chars = LINE.codePointCount(0, LINE.length());
+        LyricDissolveEffect effect = effectAt(START_MS + LyricDissolveEffect.DURATION_MS);
+        assertTrue("the consumed line still belongs to the effect", effect.affects(ENDED_LINE_ID));
+        assertFalse("nothing of it is left to hide the next line behind",
+                effect.hasVisibleCharacter(ENDED_LINE_ID, chars));
+    }
+
+    @Test public void glyphsAreVisibleForTheWholeDissolve() {
+        int chars = LINE.codePointCount(0, LINE.length());
+        assertTrue("the untouched line is fully visible",
+                effectAt(START_MS).hasVisibleCharacter(ENDED_LINE_ID, chars));
+        assertTrue("the eraser has not passed the last glyph yet",
+                effectAt(START_MS + LyricDissolveEffect.DURATION_MS - 20L)
+                        .hasVisibleCharacter(ENDED_LINE_ID, chars));
+    }
+
     @Test public void aConsumedLineNeverPopsBackWhenItMovesToAnOlderSlot() {
         LyricDissolveEffect effect = new LyricDissolveEffect();
         effect.sync(ENDED_LINE_ID, "", true, false, 0L);

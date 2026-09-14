@@ -36,7 +36,14 @@ import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.ScrollView;
 
-/** Owns independent overlay windows on the default display and a selected secondary display. */
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Owns independent overlay windows on the default display, one selected secondary display, and
+ * any number of additional screens the user turned on. Each extra screen draws from its own
+ * preference file, so a HUD and a driving display keep separate styles, sizes and positions.
+ */
 public final class LyricsDisplayService extends Service implements DisplayManager.DisplayListener {
     private static final String TAG = "LyricsDisplay";
     private static final String CHANNEL_ID = "lyrics_display";
@@ -63,6 +70,8 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     private LyricsPanelView mainPanel;
     private TextView mainUnlockHandle;
     private WindowManager.LayoutParams mainUnlockParams;
+    private View mainPlaybackPad;
+    private WindowManager.LayoutParams mainPlaybackPadParams;
     private Context secondaryContext;
     private Display secondaryDisplay;
     private WindowManager secondaryWindowManager;
@@ -70,8 +79,12 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     private LyricsPanelView secondaryPanel;
     private TextView secondaryUnlockHandle;
     private WindowManager.LayoutParams secondaryUnlockParams;
+    private View secondaryPlaybackPad;
+    private WindowManager.LayoutParams secondaryPlaybackPadParams;
     private LyricsPanelView statusLyricStrip;
     private WindowManager.LayoutParams statusLyricParams;
+    /** One overlay per additional screen (slots 2+), so several can be shown at once. */
+    private final List<ExtraOverlay> extraOverlays = new ArrayList<>();
     private WindowManager bottomSpectrumManager;
     private BottomSpectrumView bottomSpectrumView;
     private boolean settingsVisible;
@@ -305,6 +318,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         if (displayManager != null) displayManager.unregisterDisplayListener(this);
         dismissMain();
         dismissSecondary();
+        dismissExtras();
         dismissStatusLyricStrip();
         dismissBottomSpectrum();
         AudioSpectrumSource.release();
@@ -314,16 +328,19 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     @Override public void onDisplayAdded(int displayId) {
         DiagnosticLog.record(this, "Display", "added id=" + displayId);
         rebuildSecondary();
+        rebuildExtras();
         scheduleSecondaryRetry("display_added");
     }
     @Override public void onDisplayRemoved(int displayId) {
         DiagnosticLog.record(this, "Display", "removed id=" + displayId);
         rebuildSecondary();
+        rebuildExtras();
         scheduleSecondaryRetry("display_removed");
     }
     @Override public void onDisplayChanged(int displayId) {
         DiagnosticLog.record(this, "Display", "changed id=" + displayId);
         rebuildSecondary();
+        rebuildExtras();
         scheduleSecondaryRetry("display_changed");
     }
 
@@ -348,6 +365,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
             // auto-start option.  No overlay or music/session listener remains active here.
             dismissMain();
             dismissSecondary();
+            dismissExtras();
             dismissStatusLyricStrip();
             dismissBottomSpectrum();
             return;
@@ -355,17 +373,20 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         if (!canDrawOverlays()) {
             dismissMain();
             dismissSecondary();
+            dismissExtras();
             dismissStatusLyricStrip();
             dismissBottomSpectrum();
             return;
         }
         dismissMain();
         dismissSecondary();
+        dismissExtras();
         dismissBottomSpectrum();
         if (overlaysHiddenForPlayback) dismissStatusLyricStrip();
         else if (AppPreferences.mainEnabled(this) && !settingsVisible) showMain();
         if (AppPreferences.secondaryEnabled(this) && !secondaryHiddenForPlayback) showSecondary();
         else recoveryHandler.removeCallbacks(secondaryRetry);
+        if (!secondaryHiddenForPlayback) rebuildExtras();
         if (!overlaysHiddenForPlayback && AppPreferences.topLyricStrip(this)) showStatusLyricStrip();
         else dismissStatusLyricStrip();
         if (!overlaysHiddenForPlayback && AppPreferences.bottomSpectrum(this)) showBottomSpectrum();
@@ -403,9 +424,9 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                     + AppPreferences.overlayStyle(this, false));
             Log.i(TAG, "Main overlay attached at " + mainParams.x + "," + mainParams.y
                     + " size=" + width + "x" + height);
-            if (AppPreferences.overlayTouchThrough(this, false)) {
-                setOverlayTouchThrough(false, true);
-            }
+            // Re-apply whatever mode is stored: a locked or pass-through overlay has to come back
+            // the way the user left it.
+            applyOverlayInteraction(false);
         } catch (Throwable error) {
             DiagnosticLog.record(this, "Overlay", "main attach failed="
                     + error.getClass().getSimpleName());
@@ -460,9 +481,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                     + " (" + display.getName() + ")");
             secondaryRetryAttempts = 0;
             recoveryHandler.removeCallbacks(secondaryRetry);
-            if (AppPreferences.overlayTouchThrough(this, true)) {
-                setOverlayTouchThrough(true, true);
-            }
+            applyOverlayInteraction(true);
         } catch (Throwable error) {
             DiagnosticLog.record(this, "Display", "secondary attach failed="
                     + error.getClass().getSimpleName() + ": " + error.getMessage());
@@ -686,10 +705,11 @@ public final class LyricsDisplayService extends Service implements DisplayManage
             startActivity(intent);
         });
         boolean locked = AppPreferences.overlayPositionLocked(this, secondary);
-        addQuickMenuButton(content, locked ? "解锁位置" : "锁定位置（仍可点按）", () -> {
+        addQuickMenuButton(content, locked ? "解除位置锁定" : "锁定位置（保留控制按键，其余穿透）", () -> {
             AppPreferences.putDisplayBoolean(this, secondary,
                     AppPreferences.KEY_OVERLAY_POSITION_LOCKED, !locked);
             popup.dismiss();
+            applyOverlayInteraction(secondary);
         });
         addQuickMenuButton(content, "锁定并触摸穿透", () -> {
             popup.dismiss();
@@ -749,37 +769,196 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     }
 
     private void setOverlayTouchThrough(boolean secondary, boolean enabled) {
+        if (enabled) {
+            // "锁定并触摸穿透" promises a fully transparent overlay: it replaces the locked mode
+            // rather than stacking on top of it, otherwise the playback pad would survive it.
+            AppPreferences.putDisplayBoolean(this, secondary,
+                    AppPreferences.KEY_OVERLAY_POSITION_LOCKED, false);
+        }
+        AppPreferences.putOverlayTouchThrough(this, secondary, enabled);
+        applyOverlayInteraction(secondary);
+    }
+
+    /**
+     * Applies whichever interaction mode the preferences ask for, for one overlay window.
+     *
+     * <p>A locked position cannot follow a drag, so the window stops taking touches altogether and
+     * everything that is not a control falls through to whatever is underneath. The pieces that
+     * stay useful get a touchable surface of their own: the playback buttons (when they are shown)
+     * and the × handle that gets the user back out.
+     */
+    private void applyOverlayInteraction(boolean secondary) {
         WindowManager manager = secondary ? secondaryWindowManager : mainWindowManager;
         View panel = secondary ? secondaryPanel : mainPanel;
         WindowManager.LayoutParams params = secondary ? secondaryParams : mainParams;
         if (manager == null || panel == null || params == null || panel.getParent() == null) return;
+        boolean touchThrough = AppPreferences.overlayTouchThrough(this, secondary);
+        boolean locked = AppPreferences.overlayPositionLocked(this, secondary);
+        boolean passThrough = touchThrough || locked;
         int touchFlag = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-        params.flags = enabled ? params.flags | touchFlag : params.flags & ~touchFlag;
+        params.flags = passThrough ? params.flags | touchFlag : params.flags & ~touchFlag;
         // Android 12 blocks touches through opaque, non-touchable overlays as untrusted input.
-        params.alpha = enabled ? touchThroughWindowAlpha() : 1f;
+        params.alpha = passThrough ? touchThroughWindowAlpha() : 1f;
         try {
             manager.updateViewLayout(panel, params);
-            AppPreferences.get(this).edit().putBoolean(secondary
-                    ? AppPreferences.KEY_SECONDARY_OVERLAY_TOUCH_THROUGH
-                    : AppPreferences.KEY_MAIN_OVERLAY_TOUCH_THROUGH, enabled).apply();
-            if (enabled) {
-                if (!addUnlockHandle(secondary)) {
-                    params.flags &= ~touchFlag;
-                    params.alpha = 1f;
-                    manager.updateViewLayout(panel, params);
-                    AppPreferences.get(this).edit().putBoolean(secondary
-                            ? AppPreferences.KEY_SECONDARY_OVERLAY_TOUCH_THROUGH
-                            : AppPreferences.KEY_MAIN_OVERLAY_TOUCH_THROUGH, false).apply();
-                    return;
-                }
-            } else {
-                removeUnlockHandle(secondary);
-            }
-            DiagnosticLog.record(this, "Overlay", (enabled ? "touch through enabled "
-                    : "touch through disabled ") + (secondary ? "secondary" : "main"));
         } catch (Throwable error) {
-            Log.w(TAG, "Unable to change overlay touch-through", error);
+            Log.w(TAG, "Unable to change overlay interaction", error);
+            return;
         }
+        boolean keepControls = locked && !touchThrough;
+        if (passThrough) {
+            if (!addUnlockHandle(secondary)) {
+                // Without a way out the window must stay touchable, whatever the preference says.
+                params.flags &= ~touchFlag;
+                params.alpha = 1f;
+                try { manager.updateViewLayout(panel, params); } catch (Throwable ignored) { }
+                removePlaybackPad(secondary);
+                return;
+            }
+        } else {
+            removeUnlockHandle(secondary);
+        }
+        if (keepControls && AppPreferences.showPlaybackControls(this, secondary)) {
+            addPlaybackPad(secondary);
+        } else {
+            removePlaybackPad(secondary);
+        }
+        DiagnosticLog.record(this, "Overlay", (passThrough
+                ? (touchThrough ? "touch through" : "position locked, controls kept")
+                : "touch through disabled") + " " + (secondary ? "secondary" : "main"));
+    }
+
+    /**
+     * A transparent window over exactly the playback buttons. While the overlay itself is
+     * untouchable this is what keeps 上一首 / 播放暂停 / 下一首 usable, and taps anywhere else keep
+     * falling through to the content below.
+     */
+    private void addPlaybackPad(boolean secondary) {
+        WindowManager manager = secondary ? secondaryWindowManager : mainWindowManager;
+        WindowManager.LayoutParams panelParams = secondary ? secondaryParams : mainParams;
+        LyricsPanelView panel = secondary ? secondaryPanel : mainPanel;
+        if (manager == null || panelParams == null || panel == null || panel.getParent() == null) {
+            return;
+        }
+        android.graphics.Rect bounds = panel.playbackControlsBounds();
+        if (bounds == null || bounds.width() <= 0 || bounds.height() <= 0) {
+            removePlaybackPad(secondary);
+            return;
+        }
+        if (isPlaybackPadCurrent(secondary, bounds)) return;
+        removePlaybackPad(secondary);
+        Context context = secondary ? secondaryContext : this;
+        View pad = new View(context);
+        pad.setBackgroundColor(Color.TRANSPARENT);
+        pad.setContentDescription("播放控制");
+        WindowManager.LayoutParams padParams = new WindowManager.LayoutParams(
+                bounds.width(), bounds.height(),
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT);
+        padParams.gravity = Gravity.TOP | Gravity.START;
+        Point screen = displaySize(secondary ? secondaryDisplay
+                : mainWindowManager.getDefaultDisplay());
+        padParams.x = clamp(panelParams.x + bounds.left, 0,
+                Math.max(0, screen.x - bounds.width()));
+        padParams.y = clamp(panelParams.y + bounds.top, 0,
+                Math.max(0, screen.y - bounds.height()));
+        final MediaControlAction[] pressed = new MediaControlAction[1];
+        final boolean[] handledByLongPress = new boolean[1];
+        final Handler padHandler = new Handler(Looper.getMainLooper());
+        // The window itself no longer answers touches, so a long press here is the escape hatch
+        // for users whose × handle is hidden by the close-button setting.
+        final Runnable openMenu = () -> {
+            if (pressed[0] == null) return;
+            handledByLongPress[0] = true;
+            pressed[0] = null;
+            pad.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            showOverlayQuickMenu(pad, secondary);
+        };
+        pad.setOnTouchListener((v, event) -> {
+            float localX = event.getX() + bounds.left;
+            float localY = event.getY() + bounds.top;
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    pressed[0] = panel.playbackControlAt(localX, localY);
+                    handledByLongPress[0] = false;
+                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                    padHandler.removeCallbacks(openMenu);
+                    padHandler.postDelayed(openMenu, ViewConfiguration.getLongPressTimeout());
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (pressed[0] != null && panel.playbackControlAt(localX, localY) != pressed[0]) {
+                        pressed[0] = null;
+                        padHandler.removeCallbacks(openMenu);
+                    }
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    padHandler.removeCallbacks(openMenu);
+                    if (!handledByLongPress[0] && pressed[0] != null) {
+                        MusicNotificationListener.requestPlaybackControl(
+                                LyricsDisplayService.this, pressed[0]);
+                    }
+                    pressed[0] = null;
+                    return true;
+                default:
+                    padHandler.removeCallbacks(openMenu);
+                    pressed[0] = null;
+                    return true;
+            }
+        });
+        try {
+            manager.addView(pad, padParams);
+            if (secondary) {
+                secondaryPlaybackPad = pad;
+                secondaryPlaybackPadParams = padParams;
+            } else {
+                mainPlaybackPad = pad;
+                mainPlaybackPadParams = padParams;
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "Unable to add playback pad", error);
+        }
+    }
+
+    private boolean isPlaybackPadCurrent(boolean secondary, android.graphics.Rect bounds) {
+        View pad = secondary ? secondaryPlaybackPad : mainPlaybackPad;
+        WindowManager.LayoutParams padParams = secondary
+                ? secondaryPlaybackPadParams : mainPlaybackPadParams;
+        WindowManager.LayoutParams panelParams = secondary ? secondaryParams : mainParams;
+        if (pad == null || pad.getParent() == null || padParams == null || panelParams == null) {
+            return false;
+        }
+        return padParams.width == bounds.width() && padParams.height == bounds.height()
+                && padParams.x == panelParams.x + bounds.left
+                && padParams.y == panelParams.y + bounds.top;
+    }
+
+    private void removePlaybackPad(boolean secondary) {
+        WindowManager manager = secondary ? secondaryWindowManager : mainWindowManager;
+        View pad = secondary ? secondaryPlaybackPad : mainPlaybackPad;
+        if (manager != null && pad != null && pad.getParent() != null) {
+            try { manager.removeViewImmediate(pad); } catch (Throwable ignored) { }
+        }
+        if (secondary) {
+            secondaryPlaybackPad = null;
+            secondaryPlaybackPadParams = null;
+        } else {
+            mainPlaybackPad = null;
+            mainPlaybackPadParams = null;
+        }
+    }
+
+    /** Leaves either pass-through mode and gives the overlay its touches back. */
+    private void exitOverlayPassThrough(boolean secondary) {
+        AppPreferences.get(this).edit().putBoolean(secondary
+                ? AppPreferences.KEY_SECONDARY_OVERLAY_TOUCH_THROUGH
+                : AppPreferences.KEY_MAIN_OVERLAY_TOUCH_THROUGH, false).apply();
+        AppPreferences.putDisplayBoolean(this, secondary,
+                AppPreferences.KEY_OVERLAY_POSITION_LOCKED, false);
+        applyOverlayInteraction(secondary);
     }
 
     private static float touchThroughWindowAlpha() {
@@ -824,7 +1003,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         handleParams.y = clamp(panelParams.y, 0,
                 Math.max(0, displaySize(secondary ? secondaryDisplay
                         : mainWindowManager.getDefaultDisplay()).y - height));
-        handle.setOnClickListener(v -> setOverlayTouchThrough(secondary, false));
+        handle.setOnClickListener(v -> exitOverlayPassThrough(secondary));
         try {
             manager.addView(handle, handleParams);
             if (secondary) {
@@ -918,6 +1097,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
 
     private void dismissMain() {
         removeUnlockHandle(false);
+        removePlaybackPad(false);
         if (mainWindowManager != null && mainPanel != null && mainPanel.getParent() != null) {
             try { mainWindowManager.removeViewImmediate(mainPanel); }
             catch (Throwable ignored) { }
@@ -929,6 +1109,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
 
     private void dismissSecondary() {
         removeUnlockHandle(true);
+        removePlaybackPad(true);
         if (secondaryWindowManager != null && secondaryPanel != null
                 && secondaryPanel.getParent() != null) {
             try { secondaryWindowManager.removeViewImmediate(secondaryPanel); }
@@ -939,6 +1120,193 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         secondaryWindowManager = null;
         secondaryContext = null;
         secondaryDisplay = null;
+    }
+
+    /**
+     * Brings up one window per extra screen in the user's list. Entry {@code i} always owns slot
+     * {@code i + 2}, so unplugging one screen neither drops nor renames another one's settings.
+     */
+    private void rebuildExtras() {
+        dismissExtras();
+        if (displayManager == null || !canDrawOverlays()
+                || AppPreferences.serviceStoppedByUser(this)) return;
+        List<DisplaySlotRegistry.Entry> entries = DisplaySlotRegistry.entries(this);
+        if (entries.isEmpty()) return;
+        Display secondary = AppPreferences.secondaryEnabled(this) ? findSecondaryDisplay() : null;
+        int secondaryId = secondary == null ? -1 : secondary.getDisplayId();
+        for (int index = 0; index < entries.size(); index++) {
+            int slot = DisplaySlotRegistry.slotFor(index);
+            DisplaySlotRegistry.Entry entry = entries.get(index);
+            if (!entry.enabled) continue;
+            Display display = DisplaySlotRegistry.resolve(entry, displayManager);
+            if (display == null) {
+                DiagnosticLog.record(this, "Display", "extra slot " + slot + " unavailable: "
+                        + entry.describe());
+                continue;
+            }
+            if (display.getDisplayId() == Display.DEFAULT_DISPLAY
+                    || display.getDisplayId() == secondaryId) {
+                // Two windows on one screen would draw the lyrics twice.
+                DiagnosticLog.record(this, "Display", "extra slot " + slot + " skipped, display "
+                        + display.getDisplayId() + " already shows lyrics");
+                continue;
+            }
+            showExtra(slot, display);
+        }
+    }
+
+    private void showExtra(int slot, Display display) {
+        try {
+            Context context = new DisplaySlotContext(createDisplayContext(display), slot);
+            WindowManager manager = (WindowManager) context.getSystemService(WINDOW_SERVICE);
+            if (manager == null) return;
+            Point screen = displaySize(display);
+            int width = Math.min(dp(context, AppPreferences.panelWidthDp(context, true)), screen.x);
+            int height = Math.min(dp(context, AppPreferences.panelHeightDp(context, true)),
+                    screen.y);
+            LyricsPanelView panel = new LyricsPanelView(context, true);
+            WindowManager.LayoutParams params = overlayParams(width, height);
+            String style = AppPreferences.overlayStyle(context, true);
+            String xKey = AppPreferences.overlayPositionKey(true, style, true);
+            String yKey = AppPreferences.overlayPositionKey(true, style, false);
+            params.x = clamp(AppPreferences.overlayPosition(context, true, style, true,
+                    Math.max(0, (screen.x - width) / 2)), 0, Math.max(0, screen.x - width));
+            params.y = clamp(AppPreferences.overlayPosition(context, true, style, false,
+                    Math.max(0, Math.round(screen.y * 0.10f))), 0, Math.max(0, screen.y - height));
+            ExtraOverlay overlay = new ExtraOverlay(slot, display, context, manager, params, panel,
+                    xKey, yKey);
+            attachExtraDrag(overlay, screen);
+            manager.addView(panel, params);
+            extraOverlays.add(overlay);
+            DiagnosticLog.record(this, "Display", "extra slot " + slot + " attached id="
+                    + display.getDisplayId() + " name=" + display.getName() + " style=" + style
+                    + " position=" + params.x + "," + params.y);
+        } catch (Throwable error) {
+            DiagnosticLog.record(this, "Display", "extra slot " + slot + " attach failed="
+                    + error.getClass().getSimpleName() + ": " + error.getMessage());
+            Log.w(TAG, "Unable to add overlay for extra display slot " + slot, error);
+        }
+    }
+
+    private void dismissExtras() {
+        for (ExtraOverlay overlay : extraOverlays) {
+            try {
+                if (overlay.panel.getParent() != null) {
+                    overlay.windowManager.removeViewImmediate(overlay.panel);
+                }
+            } catch (Throwable ignored) { }
+        }
+        extraOverlays.clear();
+    }
+
+    /** True while this slot already has its own window. */
+    /**
+     * Drag, tap and long press for an extra screen. It deliberately carries only the essentials —
+     * move the window, remember where it was put, tap for the player, long press for that screen's
+     * settings. The lock/click-through mode and its companion touch pad stay with the main and
+     * secondary windows, which is where they were designed to be used.
+     */
+    private void attachExtraDrag(ExtraOverlay overlay, Point screen) {
+        final ViewConfiguration configuration = ViewConfiguration.get(overlay.context);
+        final int touchSlop = configuration.getScaledTouchSlop();
+        final Handler handler = new Handler(Looper.getMainLooper());
+        overlay.panel.setOnTouchListener(new View.OnTouchListener() {
+            float downRawX;
+            float downRawY;
+            int downX;
+            int downY;
+            boolean moved;
+            boolean longPressed;
+            final Runnable longPress = new Runnable() {
+                @Override public void run() {
+                    if (moved) return;
+                    longPressed = true;
+                    overlay.panel.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                }
+            };
+
+            @Override public boolean onTouch(View view, MotionEvent event) {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downRawX = event.getRawX();
+                        downRawY = event.getRawY();
+                        downX = overlay.params.x;
+                        downY = overlay.params.y;
+                        moved = false;
+                        longPressed = false;
+                        handler.postDelayed(longPress, configuration.getLongPressTimeout());
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        float dx = event.getRawX() - downRawX;
+                        float dy = event.getRawY() - downRawY;
+                        if (dx * dx + dy * dy > touchSlop * touchSlop) {
+                            moved = true;
+                            handler.removeCallbacks(longPress);
+                        }
+                        if (!moved || AppPreferences.overlayPositionLocked(overlay.context, true)) {
+                            return true;
+                        }
+                        overlay.params.x = clamp(downX + Math.round(dx), 0,
+                                Math.max(0, screen.x - overlay.params.width));
+                        overlay.params.y = clamp(downY + Math.round(dy), 0,
+                                Math.max(0, screen.y - overlay.params.height));
+                        try { overlay.windowManager.updateViewLayout(view, overlay.params); }
+                        catch (Throwable ignored) { }
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                        handler.removeCallbacks(longPress);
+                        if (moved) {
+                            AppPreferences.putOverlayPosition(overlay.context, true,
+                                    overlay.xKey, overlay.params.x);
+                            AppPreferences.putOverlayPosition(overlay.context, true,
+                                    overlay.yKey, overlay.params.y);
+                        } else if (longPressed) {
+                            boolean locked = AppPreferences.overlayPositionLocked(
+                                    overlay.context, true);
+                            AppPreferences.putDisplayBoolean(overlay.context, true,
+                                    AppPreferences.KEY_OVERLAY_POSITION_LOCKED, !locked);
+                            SafeToast.show(LyricsDisplayService.this, locked
+                                            ? "已解除本屏位置锁定"
+                                            : "已锁定本屏位置",
+                                    android.widget.Toast.LENGTH_SHORT);
+                        } else if (!MusicNotificationListener.openActivePlayer(
+                                LyricsDisplayService.this)) {
+                            openMainActivity();
+                        }
+                        return true;
+                    case MotionEvent.ACTION_CANCEL:
+                        handler.removeCallbacks(longPress);
+                        return true;
+                    default:
+                        return true;
+                }
+            }
+        });
+    }
+
+    /** One additional screen's window: its own display-scoped context, panel and position. */
+    private static final class ExtraOverlay {
+        final int slot;
+        final Display display;
+        final Context context;
+        final WindowManager windowManager;
+        final WindowManager.LayoutParams params;
+        final LyricsPanelView panel;
+        final String xKey;
+        final String yKey;
+
+        ExtraOverlay(int slot, Display display, Context context, WindowManager windowManager,
+                     WindowManager.LayoutParams params, LyricsPanelView panel, String xKey,
+                     String yKey) {
+            this.slot = slot;
+            this.display = display;
+            this.context = context;
+            this.windowManager = windowManager;
+            this.params = params;
+            this.panel = panel;
+            this.xKey = xKey;
+            this.yKey = yKey;
+        }
     }
 
     private boolean canDrawOverlays() {
@@ -983,6 +1351,9 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                 + dp(this, AppPreferences.topLyricOffsetYDp(this));
         // This strip is informational only: every tap falls through to the launcher/player.
         params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        // ...but Android 12+ refuses to pass touches through an opaque non-touchable overlay, so
+        // the alpha has to come down for the pass-through to actually happen.
+        params.alpha = touchThroughWindowAlpha();
         if (statusLyricStrip != null) {
             // Settings may change while the strip stays attached. Reload its compact renderer
             // and update its actual window bounds instead of returning with stale values.
@@ -1103,6 +1474,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                 || !AppPreferences.serviceStoppedByUser(context)
                 && (AppPreferences.mainEnabled(context)
                 || AppPreferences.secondaryEnabled(context)
+                || !DisplaySlotRegistry.entries(context).isEmpty()
                 || AppPreferences.notificationLyrics(context)
                 || AppPreferences.topLyricStrip(context)
                 || AppPreferences.bottomSpectrum(context));
@@ -1110,6 +1482,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
 
     private static boolean hasRememberedOverlayTarget(Context context) {
         return AppPreferences.mainEnabled(context) || AppPreferences.secondaryEnabled(context)
+                || !DisplaySlotRegistry.entries(context).isEmpty()
                 || AppPreferences.topLyricStrip(context) || AppPreferences.bottomSpectrum(context);
     }
 
@@ -1208,9 +1581,10 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         }
         if (hideSecondary) {
             dismissSecondary();
-        } else if (canDrawOverlays() && AppPreferences.secondaryEnabled(this)
-                && secondaryPanel == null) {
-            showSecondary();
+            dismissExtras();
+        } else if (canDrawOverlays()) {
+            if (AppPreferences.secondaryEnabled(this) && secondaryPanel == null) showSecondary();
+            if (extraOverlays.isEmpty()) rebuildExtras();
         }
     }
 

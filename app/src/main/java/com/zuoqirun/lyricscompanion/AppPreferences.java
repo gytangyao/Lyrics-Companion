@@ -156,12 +156,21 @@ final class AppPreferences {
     static final String KEY_TOP_LYRIC_SHOW_TRANSLATION = "top_lyric_show_translation";
     static final String KEY_TOP_LYRIC_BACKGROUND = "top_lyric_background";
     static final String KEY_TOP_LYRIC_SPECTRUM = "top_lyric_spectrum";
+    /** The strip's dissolve family; unset means "follow the main screen", see the accessors. */
+    static final String KEY_TOP_LYRIC_PARTICLES = "top_lyric_particles";
+    static final String KEY_TOP_LYRIC_PARTICLE_AMOUNT = "top_lyric_particle_amount";
+    static final String KEY_TOP_LYRIC_WORD_DISSOLVE = "top_lyric_word_dissolve";
+    static final String KEY_TOP_LYRIC_PREVIOUS_OPACITY = "top_lyric_previous_opacity";
     static final String KEY_BOTTOM_SPECTRUM = "bottom_spectrum";
     static final String KEY_BOTTOM_SPECTRUM_HEIGHT_DP = "bottom_spectrum_height_dp";
     static final String KEY_LOCAL_LYRIC_ENABLED = "local_lyric_enabled";
     static final String KEY_LOCAL_LYRIC_DIRECTORY_URI = "local_lyric_directory_uri";
     static final String KEY_LOCAL_LYRIC_DIRECTORY_PATH = "local_lyric_directory_path";
     static final String KEY_AVRCP_ENABLED = "avrcp_enabled";
+    static final String KEY_COMPOSITE_IDENTITY_FROM_ARTIST = "composite_identity_from_artist";
+    static final String KEY_LYRIC_ALIGN = "lyric_align";
+    /** Ordered extra screens that show lyrics besides the main and the single secondary. */
+    static final String KEY_EXTRA_DISPLAYS = "extra_displays";
     static final String KEY_LOCKSCREEN_LYRICS = "lockscreen_lyrics";
     static final String KEY_CUSTOM_FONT_FILE = "custom_font_file";
     static final String KEY_LYRIC_CACHE_POLICY = "lyric_cache_policy";
@@ -216,37 +225,61 @@ final class AppPreferences {
     }
 
     static int displayInt(Context context, boolean secondary, String key, int fallback) {
-        SharedPreferences preferences = get(context);
         String scoped = displayKey(key, secondary);
-        return preferences.contains(scoped) ? preferences.getInt(scoped, fallback)
-                : preferences.getInt(key, fallback);
+        SharedPreferences slot = displaySlotStore(context, secondary);
+        if (slot.contains(scoped)) return slot.getInt(scoped, fallback);
+        SharedPreferences shared = get(context);
+        if (shared != slot && shared.contains(scoped)) return shared.getInt(scoped, fallback);
+        return shared.getInt(key, fallback);
     }
 
     static boolean displayBoolean(Context context, boolean secondary, String key,
                                   boolean fallback) {
-        SharedPreferences preferences = get(context);
         String scoped = displayKey(key, secondary);
-        return preferences.contains(scoped) ? preferences.getBoolean(scoped, fallback)
-                : preferences.getBoolean(key, fallback);
+        SharedPreferences slot = displaySlotStore(context, secondary);
+        if (slot.contains(scoped)) return slot.getBoolean(scoped, fallback);
+        SharedPreferences shared = get(context);
+        if (shared != slot && shared.contains(scoped)) return shared.getBoolean(scoped, fallback);
+        return shared.getBoolean(key, fallback);
     }
 
     static String displayString(Context context, boolean secondary, String key, String fallback) {
-        SharedPreferences preferences = get(context);
         String scoped = displayKey(key, secondary);
-        return preferences.contains(scoped) ? preferences.getString(scoped, fallback)
-                : preferences.getString(key, fallback);
+        SharedPreferences slot = displaySlotStore(context, secondary);
+        if (slot.contains(scoped)) return slot.getString(scoped, fallback);
+        SharedPreferences shared = get(context);
+        if (shared != slot && shared.contains(scoped)) return shared.getString(scoped, fallback);
+        return shared.getString(key, fallback);
     }
 
     static void putDisplayInt(Context context, boolean secondary, String key, int value) {
-        get(context).edit().putInt(displayKey(key, secondary), value).apply();
+        displaySlotStore(context, secondary).edit()
+                .putInt(displayKey(key, secondary), value).apply();
     }
 
     static void putDisplayBoolean(Context context, boolean secondary, String key, boolean value) {
-        get(context).edit().putBoolean(displayKey(key, secondary), value).apply();
+        displaySlotStore(context, secondary).edit()
+                .putBoolean(displayKey(key, secondary), value).apply();
     }
 
     static void putDisplayString(Context context, boolean secondary, String key, String value) {
-        get(context).edit().putString(displayKey(key, secondary), value).apply();
+        displaySlotStore(context, secondary).edit()
+                .putString(displayKey(key, secondary), value).apply();
+    }
+
+    /**
+     * Where a display-scoped value lives for the window behind {@code context}.
+     *
+     * <p>The main overlay and the legacy secondary share the app's one preference file and are
+     * told apart by the {@code _main}/{@code _secondary} suffix. An extra screen (the second
+     * secondary display, a HUD, …) is a {@link DisplaySlotHost} with a file of its own, so the
+     * same suffix lands in its private store. Both readers and writers go through here, which is
+     * what makes every existing per-display accessor work unchanged for any number of screens.
+     */
+    private static SharedPreferences displaySlotStore(Context context, boolean secondary) {
+        if (!secondary || !(context instanceof DisplaySlotHost)) return get(context);
+        SharedPreferences slot = ((DisplaySlotHost) context).displaySlotPreferences();
+        return slot == null ? get(context) : slot;
     }
 
     static float textScale(Context context) { return textScale(context, false); }
@@ -256,7 +289,9 @@ final class AppPreferences {
     }
 
     static boolean showPlaybackControls(Context context, boolean secondary) {
-        return !secondary || get(context).getBoolean(KEY_SECONDARY_PLAYBACK_CONTROLS, false);
+        return !secondary
+                || displaySlotStore(context, secondary)
+                .getBoolean(KEY_SECONDARY_PLAYBACK_CONTROLS, false);
     }
 
     static int titleScale(Context context, boolean secondary) {
@@ -728,19 +763,22 @@ final class AppPreferences {
     }
 
     static String overlayStyle(Context context, boolean secondary) {
-        SharedPreferences preferences = get(context);
+        SharedPreferences slot = displaySlotStore(context, secondary);
         String key = secondary ? KEY_SECONDARY_OVERLAY_STYLE : KEY_MAIN_OVERLAY_STYLE;
-        // A fresh install starts with the former Refined presentation. Existing users who had
-        // explicitly picked the former classic card keep that "default" preference instead.
-        String fallback = preferences.contains(KEY_OVERLAY_STYLE)
-                ? preferences.getString(KEY_OVERLAY_STYLE, "refined")
+        if (slot.contains(key)) return normalizeOverlayStyle(slot.getString(key, "refined"));
+        // A brand new extra screen starts from whatever the secondary already looks like, then
+        // diverges as soon as it is adjusted.
+        SharedPreferences shared = get(context);
+        String fallback = shared.contains(KEY_OVERLAY_STYLE)
+                ? shared.getString(KEY_OVERLAY_STYLE, "refined")
                 : secondary ? "compact" : "refined";
-        return normalizeOverlayStyle(preferences.getString(key, fallback));
+        return normalizeOverlayStyle(shared.getString(key, fallback));
     }
 
     static void setOverlayStyle(Context context, boolean secondary, String style) {
-        get(context).edit().putString(secondary ? KEY_SECONDARY_OVERLAY_STYLE
-                : KEY_MAIN_OVERLAY_STYLE, normalizeOverlayStyle(style)).apply();
+        displaySlotStore(context, secondary).edit()
+                .putString(secondary ? KEY_SECONDARY_OVERLAY_STYLE
+                        : KEY_MAIN_OVERLAY_STYLE, normalizeOverlayStyle(style)).apply();
     }
 
     private static String normalizeOverlayStyle(String style) {
@@ -1023,6 +1061,25 @@ final class AppPreferences {
         return get(context).getBoolean(KEY_AVRCP_ENABLED, true);
     }
 
+    /**
+     * Some phone music apps hand the car a composite artist slot ("歌名 - 歌手") and put the live
+     * lyric line in the title, which makes the title useless as a track identity. With this on,
+     * the artist slot is parsed for the identity and the raw title becomes the live lyric.
+     */
+    static boolean compositeIdentityFromArtist(Context context) {
+        return get(context).getBoolean(KEY_COMPOSITE_IDENTITY_FROM_ARTIST, false);
+    }
+
+    /**
+     * Horizontal alignment of the lyric rows: {@code "left"}, {@code "center"}, or {@code ""} to
+     * keep each style's own default. The classic, compact and pure layouts centre their lyrics;
+     * Refined, AMLL and PiP are two-column layouts that are left-aligned by construction.
+     */
+    static String lyricAlign(Context context, boolean secondary) {
+        String value = displayString(context, secondary, KEY_LYRIC_ALIGN, "");
+        return "left".equals(value) || "center".equals(value) ? value : "";
+    }
+
     /** Restores product settings while retaining the anonymous support identity and replies. */
     static int resetUserSettings(Context context) {
         Set<String> preserved = new HashSet<>();
@@ -1042,6 +1099,15 @@ final class AppPreferences {
             removed++;
         }
         editor.commit();
+        // Each extra screen keeps its parameters in a file of its own; a reset has to reach those
+        // too, otherwise a 恢复默认设置 would leave the HUD looking the way it did before.
+        for (int index = 0; index < DisplaySlotRegistry.entries(context).size(); index++) {
+            SharedPreferences slot = context.getSharedPreferences(
+                    DisplaySlotContext.fileName(DisplaySlotRegistry.slotFor(index)),
+                    Context.MODE_PRIVATE);
+            removed += slot.getAll().size();
+            slot.edit().clear().commit();
+        }
         return removed;
     }
 
@@ -1064,11 +1130,20 @@ final class AppPreferences {
     }
 
     static boolean overlayTouchThrough(Context context, boolean secondary) {
-        return get(context).getBoolean(secondary
+        return displaySlotStore(context, secondary).getBoolean(secondary
                 ? KEY_SECONDARY_OVERLAY_TOUCH_THROUGH : KEY_MAIN_OVERLAY_TOUCH_THROUGH, false);
     }
 
-    /** Keeps the window in place while preserving lyric browsing and playback controls. */
+    static void putOverlayTouchThrough(Context context, boolean secondary, boolean enabled) {
+        displaySlotStore(context, secondary).edit().putBoolean(secondary
+                ? KEY_SECONDARY_OVERLAY_TOUCH_THROUGH : KEY_MAIN_OVERLAY_TOUCH_THROUGH, enabled)
+                .apply();
+    }
+
+    /**
+     * Locks the window and lets every non-control touch fall through to what is underneath; the
+     * playback buttons keep a touchable surface of their own while they are shown.
+     */
     static boolean overlayPositionLocked(Context context, boolean secondary) {
         return displayBoolean(context, secondary, KEY_OVERLAY_POSITION_LOCKED, false);
     }
@@ -1086,12 +1161,17 @@ final class AppPreferences {
 
     static int overlayPosition(Context context, boolean secondary, String style,
                                boolean horizontal, int fallback) {
-        SharedPreferences preferences = get(context);
+        SharedPreferences preferences = displaySlotStore(context, secondary);
         String scoped = overlayPositionKey(secondary, style, horizontal);
         if (preferences.contains(scoped)) return preferences.getInt(scoped, fallback);
         String legacy = secondary ? (horizontal ? KEY_SECONDARY_X : KEY_SECONDARY_Y)
                 : (horizontal ? KEY_MAIN_X : KEY_MAIN_Y);
-        return preferences.getInt(legacy, fallback);
+        return get(context).getInt(legacy, fallback);
+    }
+
+    /** Stores a dragged overlay position in the same store the window reads it back from. */
+    static void putOverlayPosition(Context context, boolean secondary, String key, int value) {
+        displaySlotStore(context, secondary).edit().putInt(key, value).apply();
     }
 
     static boolean hideOverlaysWhenNotPlaying(Context context) {
@@ -1225,6 +1305,56 @@ final class AppPreferences {
 
     static boolean topLyricSpectrum(Context context) {
         return get(context).getBoolean(KEY_TOP_LYRIC_SPECTRUM, false);
+    }
+
+    /**
+     * The top strip's own dissolve settings.
+     *
+     * <p>The strip sits next to the status bar rather than on the main screen, and reading the
+     * main display's values made its particles, dust amount and word erase change whenever the
+     * main overlay was adjusted. Each of these follows the main screen until the strip's own page
+     * writes it once, so an installation that never opened that page keeps the look it had.
+     */
+    static boolean topLyricParticles(Context context) {
+        return get(context).contains(KEY_TOP_LYRIC_PARTICLES)
+                ? get(context).getBoolean(KEY_TOP_LYRIC_PARTICLES, true)
+                : previousLyricParticles(context, false);
+    }
+
+    static void setTopLyricParticles(Context context, boolean value) {
+        get(context).edit().putBoolean(KEY_TOP_LYRIC_PARTICLES, value).apply();
+    }
+
+    static int topLyricParticleAmount(Context context) {
+        return get(context).contains(KEY_TOP_LYRIC_PARTICLE_AMOUNT)
+                ? Math.max(20, Math.min(300,
+                get(context).getInt(KEY_TOP_LYRIC_PARTICLE_AMOUNT, 100)))
+                : particleAmountPercent(context, false);
+    }
+
+    static void setTopLyricParticleAmount(Context context, int value) {
+        setTopLyricInt(context, KEY_TOP_LYRIC_PARTICLE_AMOUNT, value);
+    }
+
+    static boolean topLyricWordDissolve(Context context) {
+        return get(context).contains(KEY_TOP_LYRIC_WORD_DISSOLVE)
+                ? get(context).getBoolean(KEY_TOP_LYRIC_WORD_DISSOLVE, false)
+                : wordDissolve(context, false);
+    }
+
+    static void setTopLyricWordDissolve(Context context, boolean value) {
+        get(context).edit().putBoolean(KEY_TOP_LYRIC_WORD_DISSOLVE, value).apply();
+    }
+
+    static int topLyricPreviousOpacity(Context context) {
+        return get(context).contains(KEY_TOP_LYRIC_PREVIOUS_OPACITY)
+                ? Math.max(0, Math.min(100,
+                get(context).getInt(KEY_TOP_LYRIC_PREVIOUS_OPACITY, 100)))
+                : previousLyricOpacity(context, false);
+    }
+
+    static void setTopLyricPreviousOpacity(Context context, int value) {
+        setTopLyricInt(context, KEY_TOP_LYRIC_PREVIOUS_OPACITY, value);
     }
 
     static void setTopLyricInt(Context context, String key, int value) {

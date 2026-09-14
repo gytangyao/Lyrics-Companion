@@ -241,10 +241,20 @@ final class LyricsPanelView extends View {
         lyricSourceColor = AppPreferences.lyricSourceColor(getContext(), secondary);
         nextLyricScale = AppPreferences.nextLyricScale(getContext(), secondary) / 100f;
         nextLyricOpacity = AppPreferences.nextLyricOpacity(getContext(), secondary);
-        previousLyricOpacity = AppPreferences.previousLyricOpacity(getContext(), secondary);
-        previousLyricParticles = AppPreferences.previousLyricParticles(getContext(), secondary);
-        wordDissolve = AppPreferences.wordDissolve(getContext(), secondary);
-        particleAmountPercent = AppPreferences.particleAmountPercent(getContext(), secondary);
+        // The strip has its own dissolve settings: it is a separate output object, so its
+        // particles, dust amount and word erase do not move when the main overlay is adjusted.
+        previousLyricOpacity = compactTextOnly
+                ? AppPreferences.topLyricPreviousOpacity(getContext())
+                : AppPreferences.previousLyricOpacity(getContext(), secondary);
+        previousLyricParticles = compactTextOnly
+                ? AppPreferences.topLyricParticles(getContext())
+                : AppPreferences.previousLyricParticles(getContext(), secondary);
+        wordDissolve = compactTextOnly
+                ? AppPreferences.topLyricWordDissolve(getContext())
+                : AppPreferences.wordDissolve(getContext(), secondary);
+        particleAmountPercent = compactTextOnly
+                ? AppPreferences.topLyricParticleAmount(getContext())
+                : AppPreferences.particleAmountPercent(getContext(), secondary);
         previousLyricDissolve.setParticleAmount(particleAmountPercent);
         showPlayerStatus = AppPreferences.showPlayerStatus(getContext(), secondary);
         showProgress = AppPreferences.showProgress(getContext(), secondary);
@@ -440,6 +450,50 @@ final class LyricsPanelView extends View {
         if ("pip".equals(overlayStyle)) return y >= getHeight() * 0.34f;
         if ("custom".equals(overlayStyle)) return y >= getHeight() * 0.28f;
         return y >= getHeight() * 0.24f && y <= getHeight() * 0.86f;
+    }
+
+    /**
+     * Union of the playback buttons that are currently shown, in this view's own coordinates, or
+     * {@code null} when none are. The overlay service keeps a transparent touch pad over exactly
+     * this area while the window itself has stopped accepting touches.
+     */
+    android.graphics.Rect playbackControlsBounds() {
+        if (!AppPreferences.showPlaybackControls(getContext(), secondary)
+                || getWidth() <= 0 || getHeight() <= 0) return null;
+        float density = getResources().getDisplayMetrics().density;
+        PlaybackControlLayout layout = playbackControlLayout(density);
+        float left = Float.MAX_VALUE;
+        float right = -Float.MAX_VALUE;
+        float top = Float.MAX_VALUE;
+        float bottom = -Float.MAX_VALUE;
+        if (AppPreferences.showPreviousButton(getContext())) {
+            float x = layout.centerX - layout.spacing;
+            left = Math.min(left, x - layout.radius);
+            right = Math.max(right, x + layout.radius);
+            top = Math.min(top, layout.centerY - layout.radius);
+            bottom = Math.max(bottom, layout.centerY + layout.radius);
+        }
+        if (AppPreferences.showPlayPauseButton(getContext())) {
+            float radius = layout.radius * 1.12f;
+            left = Math.min(left, layout.centerX - radius);
+            right = Math.max(right, layout.centerX + radius);
+            top = Math.min(top, layout.centerY - radius);
+            bottom = Math.max(bottom, layout.centerY + radius);
+        }
+        if (AppPreferences.showNextButton(getContext())) {
+            float x = layout.centerX + layout.spacing;
+            left = Math.min(left, x - layout.radius);
+            right = Math.max(right, x + layout.radius);
+            top = Math.min(top, layout.centerY - layout.radius);
+            bottom = Math.max(bottom, layout.centerY + layout.radius);
+        }
+        if (right <= left) return null;
+        // A little slack so a fingertip aimed at a button edge still lands on it.
+        float slack = layout.radius * .5f;
+        android.graphics.Rect bounds = new android.graphics.Rect(
+                (int) Math.floor(left - slack), (int) Math.floor(top - slack),
+                (int) Math.ceil(right + slack), (int) Math.ceil(bottom + slack));
+        return bounds.intersect(0, 0, getWidth(), getHeight()) ? bounds : null;
     }
 
     MediaControlAction playbackControlAt(float x, float y) {
@@ -877,9 +931,12 @@ final class LyricsPanelView extends View {
         drawingMetadata = false;
         float basicScrollShift = basicLyricEntryShift(snapshot.lyrics.lineStartMs,
                 32f * density * unit);
-        drawCenteredDissolving(canvas, snapshot.lyrics.previousLyric,
+        // Every lyric row of this style shares one column and one alignment, so the current line,
+        // its translation and the neighbouring lines never drift apart.
+        Paint.Align lyricAlign = lyricTextAlign(Paint.Align.CENTER);
+        drawAlignedDissolving(canvas, snapshot.lyrics.previousLyric, pad, usableWidth,
                 previousBaseline + previewShift + basicScrollShift,
-                12f * density * classicTextScale * unit, inactiveLyricColor(0xFF68778C), usableWidth,
+                12f * density * classicTextScale * unit, inactiveLyricColor(0xFF68778C),
                 Typeface.NORMAL, LyricDissolveEffect.UNKNOWN_LINE);
         if (snapshot.lyrics.interlude) {
             float dotRadius = 22f * density * classicTextScale * unit * 0.35f;
@@ -888,21 +945,22 @@ final class LyricsPanelView extends View {
                     currentBaseline + previewShift + basicScrollShift - dotRadius, dotRadius,
                     currentLyricColor(0xFFFFCA66));
         } else {
-            drawKaraoke(canvas, snapshot, currentText(snapshot), width / 2f,
+            drawKaraoke(canvas, snapshot, currentText(snapshot),
+                    lyricAnchorX(pad, usableWidth, lyricAlign),
                     currentBaseline + previewShift + basicScrollShift,
-                    22f * density * classicTextScale * unit, usableWidth, Paint.Align.CENTER,
+                    22f * density * classicTextScale * unit, usableWidth, lyricAlign,
                     inactiveLyricColor(0xFFB1BCCB), currentLyricColor(0xFFFFCA66));
         }
         if (hasTranslation) {
-            drawCentered(canvas, snapshot.lyrics.translatedLyric,
+            drawAlignedLyric(canvas, snapshot.lyrics.translatedLyric, pad, usableWidth,
                     translationBaseline + previewShift + basicScrollShift,
-                    12f * density * classicTextScale * unit, currentLyricColor(0xFFB8C5D8), usableWidth,
+                    12f * density * classicTextScale * unit, currentLyricColor(0xFFB8C5D8),
                     Typeface.NORMAL);
         }
-        drawCentered(canvas, snapshot.lyrics.nextLyric,
+        drawAlignedLyric(canvas, snapshot.lyrics.nextLyric, pad, usableWidth,
                 nextBaseline + previewShift + basicScrollShift,
                 nextLyricSize(22f * density * classicTextScale * unit),
-                nextLyricColor(inactiveLyricColor(0xFF68778C)), usableWidth, Typeface.NORMAL);
+                nextLyricColor(inactiveLyricColor(0xFF68778C)), Typeface.NORMAL);
         canvas.restoreToCount(classicTextSave);
         drawProgress(canvas, pad, height - 17f * density * contentScale,
                 width - pad, 3f * density * contentScale,
@@ -1034,6 +1092,9 @@ final class LyricsPanelView extends View {
         }
         float top = Math.max(4f * density, (height - groupHeight) * 0.5f);
         float maxWidth = Math.max(1f, width - 24f * density);
+        Paint.Align lyricAlign = lyricTextAlign(Paint.Align.CENTER);
+        // maxWidth is symmetric, so the centred rows and the left-aligned ones share one column.
+        float lyricLeft = (width - maxWidth) * 0.5f;
         int save = canvas.save();
         canvas.clipRect(0f, 0f, width, height);
         boolean drewCurrent = false;
@@ -1053,11 +1114,12 @@ final class LyricsPanelView extends View {
                     compactMarqueeElapsedMs = 0L;
                     float radius = size * 0.22f;
                     drawInterludeDots(canvas, snapshot,
-                            (width - interludeDotsWidth(radius)) * 0.5f,
+                            lyricAlign == Paint.Align.LEFT ? lyricLeft
+                                    : (width - interludeDotsWidth(radius)) * 0.5f,
                             baseline - size * 0.72f, radius, lyricColor(0xFFFFFFFF));
                 } else {
                     drawCompactMarqueeKaraoke(canvas, snapshot, currentText(snapshot),
-                            (width - maxWidth) * 0.5f, baseline, size, maxWidth, density,
+                            lyricLeft, baseline, size, maxWidth, density,
                             inactiveLyricColor(0x99FFFFFF), currentLyricColor(0xFFFFFFFF));
                 }
             } else {
@@ -1066,11 +1128,11 @@ final class LyricsPanelView extends View {
                 int lineColor = adjacentLyricColor(inactiveLyricColor(withAlpha(0xFFFFFFFF, alpha)),
                         line.offset);
                 if (line.offset == -1) {
-                    drawCenteredDissolving(canvas, line.text, baseline, secondarySize, lineColor,
-                            maxWidth, Typeface.NORMAL, line.timeMs);
+                    drawAlignedDissolving(canvas, line.text, lyricLeft, maxWidth, baseline,
+                            secondarySize, lineColor, Typeface.NORMAL, line.timeMs);
                 } else {
-                    drawCentered(canvas, line.text, baseline, secondarySize, lineColor,
-                            maxWidth, Typeface.NORMAL);
+                    drawAlignedLyric(canvas, line.text, lyricLeft, maxWidth, baseline, secondarySize,
+                            lineColor, Typeface.NORMAL);
                 }
             }
             float lineBlockHeight = lineSize;
@@ -1081,10 +1143,11 @@ final class LyricsPanelView extends View {
                         + translationSize;
                 int translationAlpha = current ? 190
                         : Math.max(56, 148 - Math.min(3, Math.abs(line.offset)) * 24);
-                drawCentered(canvas, line.translated, translationBaseline, translationSize,
+                drawAlignedLyric(canvas, line.translated, lyricLeft, maxWidth, translationBaseline,
+                        translationSize,
                         adjacentLyricColor(lyricColor(withAlpha(0xFFFFFFFF, translationAlpha)),
                                 line.offset),
-                        maxWidth, Typeface.NORMAL);
+                        Typeface.NORMAL);
                 lineBlockHeight += lineSize * PureLyricLayout.TRANSLATION_GAP_RATIO
                         + translationSize;
             }
@@ -1635,10 +1698,14 @@ final class LyricsPanelView extends View {
         // Center the current/secondary line pair in the stage to the left of the cover.
         String secondaryText = showSecondaryLine ? (showNextLine
                 ? snapshot.lyrics.nextLyric : snapshot.lyrics.translatedLyric) : "";
+        // The current line, the line leaving it and the row under it all share this column and
+        // alignment, so the dissolve eraser sweeps exactly over the glyphs it is replacing.
+        Paint.Align lyricAlign = lyricTextAlign(Paint.Align.CENTER);
+        float lyricAnchor = lyricAnchorX(lyricLeft, lyricWidth, lyricAlign);
         if (showNextLine) {
             drawRefinedText(canvas, secondaryText,
-                    lyricLeft + lyricWidth * 0.5f, secondaryBaseline, secondaryLineSize,
-                    lyricColor(primaryText), lyricWidth, Paint.Align.CENTER, Typeface.NORMAL,
+                    lyricAnchor, secondaryBaseline, secondaryLineSize,
+                    lyricColor(primaryText), lyricWidth, lyricAlign, Typeface.NORMAL,
                     135);
         }
         // This strip has no previous-line row, so the line that just stopped being current
@@ -1647,8 +1714,8 @@ final class LyricsPanelView extends View {
         String leaving = snapshot.lyrics.previousLyric;
         float eraseFront = Float.NaN;
         if (!snapshot.lyrics.interlude && !leaving.isEmpty()) {
-            eraseFront = previousLineEraseFront(leaving, lyricLeft + lyricWidth * 0.5f, baseline,
-                    lyricSize, lyricWidth, Typeface.BOLD, Paint.Align.CENTER);
+            eraseFront = previousLineEraseFront(leaving, lyricAnchor, baseline,
+                    lyricSize, lyricWidth, Typeface.BOLD, lyricAlign);
         }
         if (!Float.isNaN(eraseFront)) {
             int reveal = canvas.save();
@@ -1658,8 +1725,8 @@ final class LyricsPanelView extends View {
                     showTranslation, lyricColor(withAlpha(primaryText, 120)),
                     lyricColor(primaryText), lyricColor(withAlpha(primaryText, 165)));
             canvas.restoreToCount(reveal);
-            drawDissolvingLine(canvas, leaving, lyricLeft + lyricWidth * 0.5f, baseline, lyricSize,
-                    lyricColor(primaryText), lyricWidth, Typeface.BOLD, Paint.Align.CENTER,
+            drawDissolvingLine(canvas, leaving, lyricAnchor, baseline, lyricSize,
+                    lyricColor(primaryText), lyricWidth, Typeface.BOLD, lyricAlign,
                     LyricDissolveEffect.UNKNOWN_LINE, true);
         } else {
             drawCompactCurrentLine(canvas, snapshot, density, lyricLeft, lyricWidth, baseline,
@@ -1677,8 +1744,16 @@ final class LyricsPanelView extends View {
 
     /**
      * Where the eraser currently is on the line that is leaving, or {@link Float#NaN} when that
-     * line is not dissolving. Measured with the exact size and layout the ghost is drawn with,
-     * which for the strip is the size the line really had — never a shrunk one.
+     * line is not dissolving <em>or</em> has already come apart completely. Measured with the
+     * exact size and layout the ghost is drawn with, which for the strip is the size the line
+     * really had — never a shrunk one.
+     *
+     * <p>{@link LyricDissolveEffect#affects} stays true for a line that was consumed, and the
+     * dissolve clock keeps running after the last glyph faded, so "the line is still dissolving"
+     * is not the same question as "there is still something to hide the new line behind". When
+     * nothing of the old line is left, the reveal clip has to go away: otherwise the clip ends at
+     * the old line's right edge and eats the tail of the new line whenever the new one is longer
+     * than the line before it.
      */
     private float previousLineEraseFront(String value, float anchorX, float y, float size,
                                          float maxWidth, int style, Paint.Align align) {
@@ -1688,6 +1763,10 @@ final class LyricsPanelView extends View {
         String text = ellipsize(value.replace('\n', ' '), maxWidth);
         float left = align == Paint.Align.CENTER ? anchorX - paint.measureText(text) * .5f : anchorX;
         int charCount = text.codePointCount(0, text.length());
+        if (!previousLyricDissolve.hasVisibleCharacter(LyricDissolveEffect.UNKNOWN_LINE,
+                charCount)) {
+            return Float.NaN;
+        }
         float cursor = 0f;
         int charIndex = 0;
         for (int offset = 0; offset < text.length(); ) {
@@ -1701,7 +1780,7 @@ final class LyricsPanelView extends View {
             offset += glyphChars;
             charIndex++;
         }
-        return left + paint.measureText(text);
+        return Float.NaN;
     }
 
     /** The current row of the compact strip: the sung line plus whatever sits under it. */
@@ -1829,8 +1908,11 @@ final class LyricsPanelView extends View {
             compactMarqueeActive = false;
             compactMarqueeText = "";
             compactMarqueeElapsedMs = 0L;
-            drawKaraoke(canvas, snapshot, text, x + maxWidth * 0.5f, y, requestedSize,
-                    maxWidth, Paint.Align.CENTER,
+            // A line that fits sits on the panel's chosen alignment; one that overflows always
+            // scrolls from the column's left edge.
+            Paint.Align align = lyricTextAlign(Paint.Align.CENTER);
+            drawKaraoke(canvas, snapshot, text, lyricAnchorX(x, maxWidth, align), y, requestedSize,
+                    maxWidth, align,
                     baseColor, activeColor);
             return 0f;
         }
@@ -1934,9 +2016,10 @@ final class LyricsPanelView extends View {
         paint.setTextAlign(Paint.Align.LEFT);
         float textWidth = paint.measureText(text);
         if (textWidth <= maxWidth) {
-            paint.setTextAlign(Paint.Align.CENTER);
+            Paint.Align align = lyricTextAlign(Paint.Align.CENTER);
+            paint.setTextAlign(align);
             paint.setColor(color);
-            canvas.drawText(text, x + maxWidth * 0.5f, y, paint);
+            canvas.drawText(text, lyricAnchorX(x, maxWidth, align), y, paint);
             return;
         }
         float offset = Math.min(Math.max(0f, textWidth - maxWidth), Math.max(0f, sourceOffset));
@@ -2393,6 +2476,45 @@ final class LyricsPanelView extends View {
                 fitSize(value, requestedSize, maxWidth, style), color, maxWidth, style,
                 Paint.Align.LEFT, lineId, false)) return;
         drawLeft(canvas, value, x, y, requestedSize, color, maxWidth, style);
+    }
+
+    /**
+     * The user's horizontal alignment for the lyric rows, or {@code fallback} when the setting is
+     * left on the style default. Only the single-column styles (classic, compact, pure) draw their
+     * lyrics through the helpers below; Refined, AMLL and PiP are two-column layouts whose lyrics
+     * are left-aligned by construction.
+     */
+    private Paint.Align lyricTextAlign(Paint.Align fallback) {
+        String value = AppPreferences.lyricAlign(getContext(), secondary);
+        if (value.isEmpty()) return fallback;
+        return "left".equals(value) ? Paint.Align.LEFT : Paint.Align.CENTER;
+    }
+
+    /** Anchor X that puts a row drawn with {@code align} inside {@code [left, left + maxWidth]}. */
+    private static float lyricAnchorX(float left, float maxWidth, Paint.Align align) {
+        return align == Paint.Align.CENTER ? left + maxWidth * 0.5f : left;
+    }
+
+    /** One lyric row (translation, next line, …) with the panel's chosen alignment. */
+    private void drawAlignedLyric(Canvas canvas, String value, float left, float maxWidth, float y,
+                                  float requestedSize, int color, int style) {
+        if (lyricTextAlign(Paint.Align.CENTER) == Paint.Align.LEFT) {
+            drawLeft(canvas, value, left, y, requestedSize, color, maxWidth, style);
+        } else {
+            drawCentered(canvas, value, y, requestedSize, color, maxWidth, style);
+        }
+    }
+
+    /** The dissolving form of {@link #drawAlignedLyric}. */
+    private void drawAlignedDissolving(Canvas canvas, String value, float left, float maxWidth,
+                                       float y, float requestedSize, int color, int style,
+                                       long lineId) {
+        if (lyricTextAlign(Paint.Align.CENTER) == Paint.Align.LEFT) {
+            drawLeftDissolving(canvas, value, left, y, requestedSize, color, maxWidth, style,
+                    lineId);
+        } else {
+            drawCenteredDissolving(canvas, value, y, requestedSize, color, maxWidth, style, lineId);
+        }
     }
 
     private void drawCenteredDissolving(Canvas canvas, String value, float y, float requestedSize,
