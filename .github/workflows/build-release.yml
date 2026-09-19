@@ -40,7 +40,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        # v3 runs "sdkmanager tools", which current runner images no longer ship; v4 is the
+        # release that works with the cmdline-tools that are already installed.
+        uses: android-actions/setup-android@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
