@@ -332,6 +332,41 @@ public class MusicAppRegistryTest {
                 LrcTimeline.liveLine("You know I adore ya").lyric);
     }
 
+    /**
+     * Issue #52, measured on 汽水音乐: the stuck-line detection rejected a timeline that actually had
+     * usable lines, the player published no live lyric (or only whitespace), and the panel stayed on
+     * 「即将开始」 for the whole track. A blank live lyric must neither count as available nor take
+     * the display away from the matched timeline.
+     */
+    @Test public void blankLiveLyricNeverTakesOverTheMatchedTimeline() {
+        LrcTimeline catalog = LrcTimeline.parse("[00:01.00]第一句\n[00:08.00]第二句", "");
+        LrcTimeline.At catalogAt = catalog.at(2_000L);
+        assertEquals("第一句", catalogAt.lyric);
+
+        for (String blank : new String[] {"", " ", "   ", "\n", "\t\n "}) {
+            assertFalse("空白实时歌词不算可用：" + blank.replace("\n", "\\n"),
+                    MusicStateStore.isLiveSessionLyricFallbackAvailable(
+                            "soda", true, catalog, blank, true));
+            assertFalse(MusicStateStore.isLiveLyricUsable(blank));
+            // The trap the old judgement walked into: rendering a blank live lyric yields empty
+            // text, which is what LyricsPanelView.currentText() turns into 「即将开始」.
+            assertTrue(LrcTimeline.liveLine(blank).lyric.isEmpty());
+            // The hand-over that used to strand the panel: it must keep the matched line.
+            assertEquals("第一句", MusicStateStore.atLocked(catalogAt, blank, false).lyric);
+        }
+
+        // 车机原生歌词分支同样按 trim 后判空（issue #52 建议 4）。
+        assertFalse(MusicStateStore.isLiveSessionLyricFallbackAvailable(
+                "dftc_media", false, LrcTimeline.parse("[00:01.00]词库歌词", ""), "   "));
+
+        // 有词时行为不变：实时歌词照旧接管，匹配时间轴被判定不可用时也照样回退。
+        assertTrue(MusicStateStore.isLiveLyricUsable("You know I adore ya"));
+        assertTrue(MusicStateStore.isLiveSessionLyricFallbackAvailable(
+                "soda", true, catalog, "You know I adore ya", true));
+        assertEquals("You know I adore ya",
+                MusicStateStore.atLocked(catalogAt, "You know I adore ya", true).lyric);
+    }
+
     @Test public void keepsQqMusicTitleWhenItBecomesALiveLyric() {
         assertTrue(MusicStateStore.shouldKeepLiveLyricTrackIdentity(
                 "qqmusic", true, "Song Name", "a live lyric line", "Artist", "Artist",

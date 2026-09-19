@@ -427,7 +427,11 @@ final class MusicStateStore {
         LrcTimeline.At catalogAt = timeline.at(lyricPosition);
         boolean liveLyricAvailable = isLiveSessionLyricFallbackAvailable(source,
                 lyricLoadFinished, timeline, liveSessionLyric);
-        if (!liveLyricAvailable && observePlayback) {
+        // Every hand-over below needs a live lyric that really renders (issue #52): without one the
+        // panel would leave a usable matched timeline for an empty current line and show 「即将开始」
+        // for the rest of the track.
+        boolean liveLyricUsable = isLiveLyricUsable(liveSessionLyric);
+        if (!liveLyricAvailable && liveLyricUsable && observePlayback) {
             // The matched timeline is the one on screen: only now can "it never scrolls" (issue #44)
             // apply. A true result hands the display to the live lyric below, exactly like the
             // existing "nothing matched" fallback does. The playback clock is the unshifted
@@ -436,13 +440,27 @@ final class MusicStateStore {
                     SystemClock.elapsedRealtime());
         }
         boolean catalogLyricAvailable = !timeline.isEmpty();
-        LrcTimeline.At at = liveLyricAvailable
-                ? LrcTimeline.liveLine(liveSessionLyric) : catalogAt;
+        LrcTimeline.At at = atLocked(catalogAt, liveSessionLyric, liveLyricAvailable);
         String displayedLyricSource = liveLyricAvailable
                 ? liveSessionLyricSourceName(source) : lyricSourceName;
         return new MusicSnapshot(active, playing, sourceName, title, artist, albumArt, durationMs,
                 position, lyricLoadFinished, catalogLyricAvailable || liveLyricAvailable,
                 displayedLyricSource, at);
+    }
+
+    /**
+     * The line the panel renders: the player's live lyric when it takes over, the matched timeline
+     * line otherwise.
+     *
+     * <p>{@code liveLyricAvailable} is the verdict of
+     * {@link #isLiveSessionLyricFallbackAvailable(String, boolean, LrcTimeline, String, boolean)},
+     * which never hands over on a blank live lyric (issue #52), so a live {@code At} always has text
+     * to show. Deciding here keeps that invariant in one place, and — taking both inputs as
+     * arguments — testable without the playback globals.</p>
+     */
+    static LrcTimeline.At atLocked(LrcTimeline.At catalogAt, String liveLyric,
+                                   boolean liveLyricAvailable) {
+        return liveLyricAvailable ? LrcTimeline.liveLine(liveLyric) : catalogAt;
     }
 
     /**
@@ -595,7 +613,11 @@ final class MusicStateStore {
                     + "\nlyricLoadTaskActive=" + (lyricLoadTask != null
                     && !lyricLoadTask.isDone())
                     + "\nnetEaseAutoScrollUnsupported=" + netEaseAutoScrollUnsupported
-                    + "\nliveSessionLyricPresent=" + !TextUtils.isEmpty(liveSessionLyric);
+                    + "\nliveSessionLyricPresent=" + !TextUtils.isEmpty(liveSessionLyric)
+                    // 长度把"播放器没发歌词 / 只发了空白 / 真有词"三种情况分开，空白串正是
+                    // 面板停在「即将开始」的那一种（issue #52）。
+                    + "\nliveSessionLyricLength=" + liveSessionLyric.length()
+                    + "\nliveSessionLyricUsable=" + isLiveLyricUsable(liveSessionLyric);
         }
     }
 
@@ -892,6 +914,11 @@ final class MusicStateStore {
         return false;
     }
 
+    /**
+     * The fallback for callers that do not run the stuck-line detection
+     * ({@link StuckLineDetector}): the matched timeline is never rejected, so the live lyric only
+     * takes over while nothing is matched.
+     */
     static boolean isLiveSessionLyricFallbackAvailable(String source, boolean loadFinished,
                                                         LrcTimeline catalogTimeline,
                                                         String liveLyric) {
@@ -908,10 +935,24 @@ final class MusicStateStore {
     static boolean isLiveSessionLyricFallbackAvailable(String source, boolean loadFinished,
                                                         LrcTimeline catalogTimeline,
                                                         String liveLyric, boolean timelineUnusable) {
-        if ("dftc_media".equals(source)) return !TextUtils.isEmpty(liveLyric);
+        if ("dftc_media".equals(source)) return isLiveLyricUsable(liveLyric);
         return usesLiveTitleMetadata(source) && (loadFinished || "soda".equals(source))
                 && (timelineUnusable || catalogTimeline == null || catalogTimeline.isEmpty())
-                && !TextUtils.isEmpty(liveLyric);
+                && isLiveLyricUsable(liveLyric);
+    }
+
+    /**
+     * Whether the player published a live lyric that can actually be shown.
+     *
+     * <p>A blank string is not a lyric. {@link LrcTimeline#liveLine(String)} trims what it renders,
+     * so accepting a blank one here let the display hand the panel over to an empty current line:
+     * {@code LyricsPanelView.currentText()} then fell through to 「即将开始」, and because the
+     * fallback kept answering "available" it never came back to the catalog timeline it had just
+     * abandoned — the panel stayed on that text for the whole track (issue #52). Deciding on the
+     * trimmed text keeps the two sides consistent.</p>
+     */
+    static boolean isLiveLyricUsable(String liveLyric) {
+        return liveLyric != null && !liveLyric.trim().isEmpty();
     }
 
     static boolean isNetEaseAutoScrollUnsupported(String source, String rawTitle) {
