@@ -28,6 +28,7 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -62,6 +63,7 @@ public final class MainActivity extends AppCompatActivity {
     private static final int REQUEST_RECORD_AUDIO = 2418;
     private static final int REQUEST_LOCAL_LYRIC_DIRECTORY = 2419;
     private static final int REQUEST_BLUETOOTH_CONNECT = 2420;
+    private static final int REQUEST_LOCAL_LYRIC_STORAGE = 2421;
     private static final String STATE_SELECTED_SECTION = "selected_section";
     private static final String[] SECTION_LABELS = {"总览", "显示", "歌词", "高级"};
     private static final String[] SECTION_TITLES = {"设置总览", "显示与外观", "歌词来源与校准", "高级与维护"};
@@ -421,6 +423,17 @@ public final class MainActivity extends AppCompatActivity {
             }
         });
         lyricCard.addView(avrcp);
+        // issue #44：匹配到的歌词长时间不滚动时，改用播放器实时歌词。
+        MaterialSwitch stuckFallback = toggle("匹配歌词长时间不滚动时改用播放器实时歌词",
+                "蓝牙等通道偶尔会匹配到一条一直停在第一句的时间轴：当播放进度在推进、当前行超过 25 秒"
+                        + "没有推进，且播放器的实时歌词一直在更新时，改用实时歌词；实时歌词本身不动时"
+                        + "仍保留原歌词。默认开启");
+        stuckFallback.setChecked(AppPreferences.stuckLyricFallback(this));
+        stuckFallback.setOnCheckedChangeListener((button, checked) -> {
+            AppPreferences.setStuckLyricFallback(this, checked);
+            MusicStateStore.reloadLyrics(this);
+        });
+        lyricCard.addView(stuckFallback);
         MaterialSwitch compositeIdentity = toggle("从歌手栏综合识别歌名（蓝牙/未知通道）",
                 "部分手机音乐 App 把实时歌词放进「歌名」栏、把「歌名 - 歌手」放进「歌手」栏，"
                         + "导致按歌名搜词库必然失败。开启后先从歌手栏解析歌名再匹配，歌名栏原文"
@@ -1339,6 +1352,11 @@ public final class MainActivity extends AppCompatActivity {
             LyricsDisplayService.startOrRefresh(this);
             refreshPreview();
             refreshStatus();
+        } else if (requestCode == REQUEST_LOCAL_LYRIC_STORAGE) {
+            SafeToast.show(this, LocalLyricClient.canReadManualDirectory(this)
+                    ? "已授予存储读取权限，正在重新读取本地歌词"
+                    : LocalLyricClient.manualDirectorySaveMessage(this), Toast.LENGTH_LONG);
+            MusicStateStore.reloadLyrics(this);
         }
     }
 
@@ -1449,18 +1467,37 @@ public final class MainActivity extends AppCompatActivity {
 
         if (extraDisplayHost != null) {
             extraDisplayHost.removeAllViews();
+            // 每块屏解析一次；「已启用且已连接」的屏另外记一份快照，用来看两行是不是同一块
+            // 物理屏（issue #23）。未连接的屏没有名字与分辨率，既不参与判断也不出提示。
+            ExtraScreenOverlap overlap = new ExtraScreenOverlap();
+            Display[] resolved = new Display[entries.size()];
+            int[] panelIndex = new int[entries.size()];
             for (int index = 0; index < entries.size(); index++) {
-                addExtraDisplayRow(extraDisplayHost, entries.get(index), index);
+                resolved[index] = findConnectedDisplay(entries.get(index));
+                panelIndex[index] = -1;
+                if (resolved[index] != null && entries.get(index).enabled) {
+                    panelIndex[index] = overlap.remember(resolved[index]);
+                }
+            }
+            for (int index = 0; index < entries.size(); index++) {
+                addExtraDisplayRow(extraDisplayHost, entries.get(index), index, resolved[index],
+                        overlap.hint(panelIndex[index], resolved[index]));
             }
             for (Display display : connected) {
                 if (indexOfDisplay(entries, display) >= 0) continue;
-                addNewDisplayRow(extraDisplayHost, display);
+                addNewDisplayRow(extraDisplayHost, display, overlap.hint(-1, display));
             }
             if (extraDisplayHost.getChildCount() == 0) {
                 TextView empty = text("当前没有检测到其它屏幕；接入后会自动出现在这里。",
                         12, 0xFF8392A8, false);
                 empty.setPadding(0, dp(6), 0, 0);
                 extraDisplayHost.addView(empty);
+            }
+            String overlapNote = overlap.summary();
+            if (!overlapNote.isEmpty()) {
+                TextView note = text(overlapNote, 12, 0xFF74869D, false);
+                note.setPadding(0, dp(8), 0, 0);
+                extraDisplayHost.addView(note);
             }
         }
 
@@ -1571,9 +1608,9 @@ public final class MainActivity extends AppCompatActivity {
         joystickTargetHost.addView(spinner, new LinearLayout.LayoutParams(-1, dp(48)));
     }
 
-    private void addExtraDisplayRow(LinearLayout host, DisplaySlotRegistry.Entry entry, int index) {
-        Display display = findConnectedDisplay(entry);
-        String label = display != null ? display.getName() + "  ·  ID " + display.getDisplayId()
+    private void addExtraDisplayRow(LinearLayout host, DisplaySlotRegistry.Entry entry, int index,
+                                    Display display, String overlapHint) {
+        String label = display != null ? displayLabel(display) + overlapHint
                 : entry.describe() + "（未连接）";
         LinearLayout row = extraDisplayRow(label, entry.enabled,
                 checked -> setExtraDisplayEnabled(index, null, checked));
@@ -1589,10 +1626,89 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void addNewDisplayRow(LinearLayout host, Display display) {
-        String label = display.getName() + "  ·  ID " + display.getDisplayId();
-        host.addView(extraDisplayRow(label + "（未显示歌词）", false,
+    private void addNewDisplayRow(LinearLayout host, Display display, String overlapHint) {
+        String label = displayLabel(display) + "（未显示歌词）" + overlapHint;
+        host.addView(extraDisplayRow(label, false,
                 checked -> setExtraDisplayEnabled(-1, display, checked)));
+    }
+
+    /** 一行屏幕的标签：名字加显示 ID，和「投屏屏幕」下拉里的写法一致。 */
+    private static String displayLabel(Display display) {
+        return display.getName() + "  ·  ID " + display.getDisplayId();
+    }
+
+    /**
+     * 一块屏的名字与分辨率快照；判断本身由不依赖 Android 类型的 DisplayIdentity 完成。
+     *
+     * <p>{@code getRealMetrics} 在新 SDK 上标了过时，但它是 minSdk 19 上不必为投屏通道新建 Context
+     * 的取法，也不会因为某块屏不让建 Context 而失败；与仓库里其它量屏幕尺寸的地方一致。
+     */
+    private static DisplayIdentity.Screen panelOf(Display display) {
+        DisplayMetrics metrics = new DisplayMetrics();
+        display.getRealMetrics(metrics);
+        return new DisplayIdentity.Screen(display.getName(), metrics.widthPixels,
+                metrics.heightPixels, metrics.densityDpi);
+    }
+
+    /**
+     * 「已启用且已连接」的屏幕清单，用来在两行之间认出同一块物理屏（issue #23）。
+     *
+     * <p>有的车机把同一块屏暴露成多个 Display（投屏通道，如 {@code ..._0} 与 {@code ..._1}）。
+     * 两块都开启只会在同一块屏上叠两层歌词；这里只提示，不合并、不隐藏，也不写任何设置，用户想
+     * 两块一起开仍然可以。每次刷新列表都重建，全是纯计算，不弹 Toast。
+     */
+    private static final class ExtraScreenOverlap {
+        private final List<DisplayIdentity.Screen> panels = new ArrayList<>();
+        private final List<String> labels = new ArrayList<>();
+
+        /** 记下一块已启用的屏，返回它在清单里的下标（判断时用来跳过它自己）。 */
+        int remember(Display display) {
+            panels.add(panelOf(display));
+            labels.add(displayLabel(display));
+            return panels.size() - 1;
+        }
+
+        /**
+         * 这一行的重叠提示。
+         *
+         * @param self   该行在清单里的下标，-1 表示它本身还没启用
+         * @param display 该行连接的屏幕，未连接时为 null（不猜）
+         */
+        String hint(int self, Display display) {
+            if (display == null) return "";
+            DisplayIdentity.Screen panel = panelOf(display);
+            for (int index = 0; index < panels.size(); index++) {
+                if (index == self) continue;
+                String reason = DisplayIdentity.duplicateReason(panel, panels.get(index));
+                if (reason.isEmpty()) continue;
+                return " · 可能是同一块屏（与「" + labels.get(index) + "」" + reason + "）";
+            }
+            return "";
+        }
+
+        /** 已启用的屏幕里互相疑似同一块时的列表说明；没有重叠、或只有一块屏时返回空串。 */
+        String summary() {
+            boolean[] involved = new boolean[panels.size()];
+            String reason = "";
+            int count = 0;
+            for (int left = 0; left < panels.size(); left++) {
+                for (int right = left + 1; right < panels.size(); right++) {
+                    String found = DisplayIdentity.duplicateReason(panels.get(left),
+                            panels.get(right));
+                    if (found.isEmpty()) continue;
+                    if (reason.isEmpty()) reason = found;
+                    involved[left] = true;
+                    involved[right] = true;
+                }
+            }
+            for (boolean hit : involved) {
+                if (hit) count++;
+            }
+            if (count == 0) return "";
+            return "检测到 " + count + " 块屏幕疑似同一块（" + reason
+                    + "）：在同一块屏上叠两层歌词只会看着更粗更亮，还会白跑一遍渲染；"
+                    + "建议只留一块，其余关掉。";
+        }
     }
 
     /** One screen row: its name plus the switch that turns its own overlay on or off. */
@@ -1699,8 +1815,11 @@ public final class MainActivity extends AppCompatActivity {
                                                   View view, int position, long id) {
                 if (values[position].equals(AppPreferences.themeMode(MainActivity.this))) return;
                 AppPreferences.setThemeMode(MainActivity.this, values[position]);
-                LyricsCompanionApp.applyMaterialTheme(values[position]);
+                // 时间段开关打开时按当前时间换算成白天/夜晚，再交给 Material 主题（issue #34）。
+                LyricsCompanionApp.applyMaterialTheme(
+                        AppPreferences.resolvedThemeMode(MainActivity.this));
                 AppPreferences.changed(MainActivity.this);
+                refreshStatus();
             }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parentView) { }
         });
@@ -1709,6 +1828,76 @@ public final class MainActivity extends AppCompatActivity {
                 0xFF74869D, false);
         mainThemeNote.setPadding(0, dp(3), 0, dp(2));
         parent.addView(mainThemeNote);
+
+        // 可选的时间段（issue #34）：打开后按下面的深色时段自动切换；关掉就按上面的模式判断，
+        // 「跟随系统」即由系统的深浅色决定。
+        MaterialSwitch schedule = toggle("按时间段自动切换深浅色",
+                "打开后在下面设定的深色时段内使用夜晚配色，其余时间用白天配色；关掉则按上面的模式"
+                        + "（跟随系统 / 白天 / 夜晚）判断。深色开始与结束相同表示不启用该时段");
+        View startGroup = addThemeScheduleHour(parent, "深色开始（整点）", true);
+        View endGroup = addThemeScheduleHour(parent, "深色结束（整点）", false);
+        View[] scheduleRows = { startGroup, endGroup };
+        schedule.setChecked(AppPreferences.themeScheduleEnabled(this));
+        schedule.setOnCheckedChangeListener((button, checked) -> {
+            AppPreferences.setThemeScheduleEnabled(MainActivity.this, checked);
+            for (View row : scheduleRows) {
+                row.setVisibility(checked ? View.VISIBLE : View.GONE);
+            }
+            LyricsCompanionApp.applyMaterialTheme(
+                    AppPreferences.resolvedThemeMode(MainActivity.this));
+            AppPreferences.changed(MainActivity.this);
+        });
+        parent.addView(schedule);
+        for (View row : scheduleRows) {
+            row.setVisibility(schedule.isChecked() ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    /**
+     * 时间段配色的起止整点下拉（issue #34）；跨零点（如 19 → 7）按深色时段处理。
+     *
+     * @return the group holding the label and the spinner, so the switch above can hide it
+     */
+    private View addThemeScheduleHour(LinearLayout parent, String title, boolean start) {
+        LinearLayout group = new LinearLayout(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        TextView label = text(title, 13, 0xFF93A4B9, true);
+        label.setPadding(0, dp(8), 0, 0);
+        group.addView(label);
+        Spinner spinner = new Spinner(this, Spinner.MODE_DIALOG);
+        String[] hours = new String[24];
+        for (int hour = 0; hour < 24; hour++) {
+            hours[hour] = String.format(java.util.Locale.ROOT, "%02d:00", hour);
+        }
+        spinner.setPopupBackgroundDrawable(solid(0xFF132238, 14));
+        spinner.setAdapter(new ThemedSpinnerAdapter<>(this, hours));
+        int selected = (start ? AppPreferences.themeScheduleStartMinute(this)
+                : AppPreferences.themeScheduleEndMinute(this)) / 60;
+        spinner.setSelection(Math.max(0, Math.min(23, selected)), false);
+        spinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parentView,
+                                                  View view, int position, long id) {
+                int minute = position * 60;
+                int stored = start ? AppPreferences.themeScheduleStartMinute(MainActivity.this)
+                        : AppPreferences.themeScheduleEndMinute(MainActivity.this);
+                if (stored == minute) return;
+                if (start) AppPreferences.setThemeScheduleStartMinute(MainActivity.this, minute);
+                else AppPreferences.setThemeScheduleEndMinute(MainActivity.this, minute);
+                LyricsCompanionApp.applyMaterialTheme(
+                        AppPreferences.resolvedThemeMode(MainActivity.this));
+                AppPreferences.changed(MainActivity.this);
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parentView) { }
+        });
+        group.addView(spinner, new LinearLayout.LayoutParams(-1, dp(48)));
+        if (!start) {
+            TextView note = text("深色开始与结束相同表示不启用该时段（始终白天）。", 12,
+                    0xFF74869D, false);
+            note.setPadding(0, dp(3), 0, 0);
+            group.addView(note);
+        }
+        parent.addView(group);
+        return group;
     }
 
     /** Enlarges controls on low-density automotive screens without affecting lyric typography. */
@@ -2178,7 +2367,8 @@ public final class MainActivity extends AppCompatActivity {
         layout.addView(input);
         new MaterialAlertDialogBuilder(this)
                 .setTitle("手动填写本地歌词目录")
-                .setMessage("用于没有系统目录选择器的车机。应用只在该目录及其子目录查找匹配的 .lrc；路径不会导出到配置分享码。")
+                .setMessage("用于没有系统目录选择器的车机。应用只在该目录及其子目录查找匹配的 .lrc；路径不会导出到配置分享码。"
+                        + LocalLyricClient.manualDirectoryRequirementNote(this))
                 .setView(layout)
                 .setNegativeButton("取消", null)
                 .setNeutralButton("清除", (dialog, which) -> {
@@ -2191,8 +2381,15 @@ public final class MainActivity extends AppCompatActivity {
                     AppPreferences.get(this).edit()
                             .putString(AppPreferences.KEY_LOCAL_LYRIC_DIRECTORY_PATH, path).apply();
                     MusicStateStore.reloadLyrics(this);
-                    SafeToast.show(this, path.isEmpty() ? "已清除手动歌词目录" : "已保存手动歌词目录",
-                            Toast.LENGTH_SHORT);
+                    if (path.isEmpty()) {
+                        SafeToast.show(this, "已清除手动歌词目录", Toast.LENGTH_SHORT);
+                    } else if (!LocalLyricClient.requestManualDirectoryAccess(this,
+                            REQUEST_LOCAL_LYRIC_STORAGE)) {
+                        // 无需申请或系统不再支持该权限时立刻给出结论；申请时由
+                        // onRequestPermissionsResult 收尾，权限被拒绝也不会看起来还能用。
+                        SafeToast.show(this, LocalLyricClient.manualDirectorySaveMessage(this),
+                                Toast.LENGTH_LONG);
+                    }
                 }).show();
     }
 

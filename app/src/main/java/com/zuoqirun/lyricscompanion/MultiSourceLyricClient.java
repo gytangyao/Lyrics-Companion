@@ -53,11 +53,14 @@ final class MultiSourceLyricClient {
                 String title, String artist, long durationMs, SessionTimeline sessionTimeline,
                 boolean bypassMatchedCache) throws Exception {
         if (AppPreferences.localLyricEnabled(appContext)) {
-            LrcTimeline localTimeline = local.load(mediaUri, title, artist);
-            if (!localTimeline.isEmpty()) {
-                DiagnosticLog.record(appContext, "Lyrics", "provider=local result=matched lines="
-                        + localTimeline.lineCount());
-                return new Result(localTimeline, "本地 LRC", "local");
+            LocalLyricClient.Hit localHit = local.load(mediaUri, title, artist);
+            if (!localHit.timeline.isEmpty()) {
+                // A tag inside an audio file found by name (the player gave us no readable path)
+                // is a different link of the chain than a .lrc file: say which one matched.
+                String sourceName = localHit.embedded ? "内嵌歌词" : "本地 LRC";
+                DiagnosticLog.record(appContext, "Lyrics", "provider=local result=matched source="
+                        + sourceName + " lines=" + localHit.timeline.lineCount());
+                return new Result(localHit.timeline, sourceName, "local");
             }
         }
         CatalogPlan plan = catalogPlan(currentSource, selectedCatalog, playerCatalogFallback,

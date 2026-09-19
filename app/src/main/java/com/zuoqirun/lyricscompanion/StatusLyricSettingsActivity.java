@@ -57,12 +57,15 @@ public final class StatusLyricSettingsActivity extends AppCompatActivity {
                 AppPreferences.KEY_TOP_LYRIC_OFFSET_X_DP);
         addSeek(layout, "垂直偏移", -240, 240, AppPreferences.topLyricOffsetYDp(this), " dp",
                 AppPreferences.KEY_TOP_LYRIC_OFFSET_Y_DP);
+        addSeek(layout, "下一句字号", 45, 160, AppPreferences.topLyricNextFontScale(this), "%",
+                AppPreferences.KEY_TOP_LYRIC_NEXT_FONT_SCALE);
         addToggle(layout, "显示歌词翻译（替代下一句）",
                 AppPreferences.KEY_TOP_LYRIC_SHOW_TRANSLATION,
                 AppPreferences.topLyricShowTranslation(this));
         addToggle(layout, "显示律动条", AppPreferences.KEY_TOP_LYRIC_SPECTRUM,
                 AppPreferences.topLyricSpectrum(this));
-        TextView layoutNote = text("横移范围按当前屏幕宽度计算，拖到两端时歌词区域会贴齐对应屏幕边缘。顶部条强制使用紧凑歌词的双行、逐字高亮和跟随滚动。", 12,
+        TextView layoutNote = text("横移范围按当前屏幕宽度计算，拖到两端时歌词区域会贴齐对应屏幕边缘。顶部条强制使用紧凑歌词的双行、逐字高亮和跟随滚动。"
+                + "「下一句字号」是顶部条自己的设置：没在这里调过之前沿用主屏的下一句字号，调过之后只影响顶部条（issue #19）。", 12,
                 0xFF8392A8, false);
         layoutNote.setLineSpacing(0f, 1.2f);
         layoutNote.setPadding(0, dp(8), 0, 0);

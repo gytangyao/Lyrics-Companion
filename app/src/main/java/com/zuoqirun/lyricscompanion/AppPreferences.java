@@ -3,6 +3,7 @@ package com.zuoqirun.lyricscompanion;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -39,6 +40,32 @@ final class AppPreferences {
     static final String KEY_NEXT_LYRIC_SCALE = "next_lyric_scale";
     static final String KEY_NEXT_LYRIC_OPACITY = "next_lyric_opacity";
     static final String KEY_PREVIOUS_LYRIC_OPACITY = "previous_lyric_opacity";
+    static final String KEY_PREVIOUS_LYRIC_SCALE = "previous_lyric_scale";
+    static final String KEY_CONTENT_ALIGN = "content_align";
+    /** 面板圆角占短边的百分比; -1 keeps each style's own radius (issue #37). */
+    static final String KEY_CORNER_RADIUS_PERCENT = "corner_radius_percent";
+    /** 圆形封面按播放进度旋转, and how many seconds one turn takes (issue #22). */
+    static final String KEY_COVER_ROTATION = "cover_rotation";
+    static final String KEY_COVER_ROTATION_PERIOD_SECONDS = "cover_rotation_period_seconds";
+    /** 紧凑 / AMLL 的封面改成圆形（issue #22）；不设时保持样式原本的圆角方形。 */
+    static final String KEY_ROUND_COVER = "round_cover";
+    /** 可选的时间段配色开关；关掉时按主题模式（跟随系统 / 白天 / 夜晚）判断（issue #34）。 */
+    static final String KEY_THEME_SCHEDULE_ENABLED = "theme_schedule_enabled";
+    /** 「正在匹配歌词」以动画呈现, and how long a match may take before it starts (issue #45). */
+    static final String KEY_MATCHING_ANIMATION = "matching_animation";
+    static final String KEY_MATCHING_ANIMATION_DELAY = "matching_animation_delay_ms";
+    /** 无逐字时间轴时按本句时长估算逐字进度（issue #21），默认关闭。 */
+    static final String KEY_ESTIMATED_WORD_KARAOKE = "estimated_word_karaoke";
+    /** Dark window of the scheduled theme, in minutes of the day (issue #34). */
+    static final String KEY_THEME_SCHEDULE_START_MINUTE = "theme_schedule_start_minute";
+    static final String KEY_THEME_SCHEDULE_END_MINUTE = "theme_schedule_end_minute";
+    /** 「指定应用」规则的方向，每屏一个：true = 白名单（只在名单内的应用里显示，issue #43）。 */
+    static final String KEY_APP_RULE_WHITELIST_MAIN = "app_rule_whitelist_main";
+    static final String KEY_APP_RULE_WHITELIST_SECONDARY = "app_rule_whitelist_secondary";
+    /** 忽略这些应用发布的媒体元数据（issue #35）。 */
+    static final String KEY_IGNORED_PLAYER_PACKAGES = "ignored_player_packages";
+    /** 匹配到的歌词长时间不滚动时，改用播放器实时歌词（issue #44）。 */
+    static final String KEY_STUCK_LYRIC_FALLBACK = "stuck_lyric_fallback";
     static final String KEY_PREVIOUS_LYRIC_PARTICLES = "previous_lyric_particles";
     static final String KEY_PARTICLE_AMOUNT = "previous_lyric_particle_amount";
     static final String KEY_WORD_DISSOLVE = "word_dissolve";
@@ -147,6 +174,8 @@ final class AppPreferences {
     static final String KEY_STATUS_LYRIC_LIGHT_COLOR = "status_lyric_light_color";
     static final String KEY_STATUS_LYRIC_DARK_COLOR = "status_lyric_dark_color";
     static final String KEY_TOP_LYRIC_FONT_SCALE = "top_lyric_font_scale";
+    /** The strip's own 下一句字号; unset means "follow the main screen" (issue #19). */
+    static final String KEY_TOP_LYRIC_NEXT_FONT_SCALE = "top_lyric_next_font_scale";
     static final String KEY_TOP_LYRIC_REGION_PERCENT = "top_lyric_region_percent";
     static final String KEY_TOP_LYRIC_OFFSET_X_DP = "top_lyric_offset_x_dp";
     static final String KEY_TOP_LYRIC_OFFSET_Y_DP = "top_lyric_offset_y_dp";
@@ -226,9 +255,82 @@ final class AppPreferences {
         return key + (secondary ? "_secondary" : "_main");
     }
 
+    /**
+     * 可选歌词样式，与设置页的样式下拉一致（issue #39 的"应用到其它样式"用）。注意经典的 id 是
+     * {@code default}，与 {@link #normalizeOverlayStyle(String)} 保持一致。
+     */
+    static final String[] OVERLAY_STYLES = {"default", "refined", "amll", "compact", "pip", "pure",
+            "custom"};
+
+    /**
+     * 这些"共用显示参数"按 <b>屏 × 样式</b> 两级保存（issue #39）：字号、颜色与描边、背景不透明度、
+     * 歌词显示行数、粒子与逐字擦除、上一句 / 下一句的不透明度与字号、对齐与圆角、封面与匹配动画。
+     *
+     * <p>样式选择本身、位置锁定 / 触摸穿透、歌词时间校正、缓存与隐藏规则这些"行为"设置仍然只按屏
+     * 共用：它们与样式无关，按样式各存一份只会让用户改了一处、别处不生效。
+     */
+    private static final Set<String> STYLE_SCOPED_KEYS = Collections.unmodifiableSet(
+            new HashSet<>(Arrays.asList(
+                    KEY_TEXT_SCALE, KEY_TITLE_SCALE, KEY_NEXT_LYRIC_SCALE, KEY_PREVIOUS_LYRIC_SCALE,
+                    KEY_NEXT_LYRIC_OPACITY, KEY_PREVIOUS_LYRIC_OPACITY,
+                    KEY_OPACITY, KEY_STYLE_COVER_SIZE, KEY_STYLE_BLUR, KEY_STYLE_DIM,
+                    KEY_CORNER_RADIUS_PERCENT, KEY_LYRIC_ALIGN, KEY_CONTENT_ALIGN,
+                    KEY_STYLE_LYRIC_LINES,
+                    KEY_PREVIOUS_LYRIC_PARTICLES, KEY_PARTICLE_AMOUNT, KEY_WORD_DISSOLVE,
+                    KEY_ESTIMATED_WORD_KARAOKE, KEY_MATCHING_ANIMATION,
+                    KEY_MATCHING_ANIMATION_DELAY,
+                    KEY_ROUND_COVER, KEY_COVER_ROTATION, KEY_COVER_ROTATION_PERIOD_SECONDS,
+                    KEY_LYRIC_COLOR, KEY_CURRENT_LYRIC_COLOR, KEY_INACTIVE_LYRIC_COLOR,
+                    KEY_LYRIC_LIGHT_COLOR, KEY_LYRIC_DARK_COLOR,
+                    KEY_CURRENT_LYRIC_LIGHT_COLOR, KEY_CURRENT_LYRIC_DARK_COLOR,
+                    KEY_INACTIVE_LYRIC_LIGHT_COLOR, KEY_INACTIVE_LYRIC_DARK_COLOR,
+                    KEY_LYRIC_OUTLINE, KEY_LYRIC_OUTLINE_COLOR, KEY_LYRIC_OUTLINE_ALPHA,
+                    KEY_LYRIC_OUTLINE_WIDTH,
+                    KEY_CURRENT_LYRIC_OUTLINE, KEY_CURRENT_LYRIC_OUTLINE_COLOR,
+                    KEY_CURRENT_LYRIC_OUTLINE_ALPHA, KEY_CURRENT_LYRIC_OUTLINE_WIDTH,
+                    KEY_INACTIVE_LYRIC_OUTLINE, KEY_INACTIVE_LYRIC_OUTLINE_COLOR,
+                    KEY_INACTIVE_LYRIC_OUTLINE_ALPHA, KEY_INACTIVE_LYRIC_OUTLINE_WIDTH,
+                    KEY_TITLE_COLOR, KEY_ARTIST_COLOR, KEY_PLAYER_COLOR, KEY_LYRIC_SOURCE_COLOR,
+                    KEY_BACKGROUND_LIGHT_COLOR, KEY_BACKGROUND_DARK_COLOR,
+                    KEY_TRAILING_ACCENT)));
+
+    /** 屏 × 样式两级键；样式为空时按默认样式（经典 {@code default}）算。 */
+    static String styleScopedKey(String key, boolean secondary, String style) {
+        String suffix = style == null || style.trim().isEmpty() ? "default" : style.trim();
+        return displayKey(key, secondary) + "_" + suffix;
+    }
+
+    /** 这个键是否按样式各存一份（issue #39）。 */
+    static boolean isStyleScopedKey(String key) {
+        return key != null && STYLE_SCOPED_KEYS.contains(key);
+    }
+
+    /** 这一屏正在用的样式，决定"共用显示参数"读写的层级。 */
+    private static String displayStyle(Context context, boolean secondary) {
+        String style = overlayStyle(context, secondary);
+        return style == null || style.trim().isEmpty() ? "default" : style.trim();
+    }
+
+    /** 写入键：分样式的参数写 屏 × 样式，其余仍写屏。 */
+    private static String displayWriteKey(Context context, boolean secondary, String key) {
+        return isStyleScopedKey(key)
+                ? styleScopedKey(key, secondary, displayStyle(context, secondary))
+                : displayKey(key, secondary);
+    }
+
+    /**
+     * 分样式的值优先，其次才是"这一屏共用的值"（老安装的现值），最后是历史遗留的裸键。于是升级后
+     * 观感不变，只有用户在某个样式下改过某一项，那一项才会为该样式单独存一份（issue #39）。
+     */
     static int displayInt(Context context, boolean secondary, String key, int fallback) {
-        String scoped = displayKey(key, secondary);
         SharedPreferences slot = displaySlotStore(context, secondary);
+        if (isStyleScopedKey(key)) {
+            String styled = styleScopedKey(key, secondary, displayStyle(context, secondary));
+            if (slot.contains(styled)) return slot.getInt(styled, fallback);
+            SharedPreferences shared = get(context);
+            if (shared != slot && shared.contains(styled)) return shared.getInt(styled, fallback);
+        }
+        String scoped = displayKey(key, secondary);
         if (slot.contains(scoped)) return slot.getInt(scoped, fallback);
         SharedPreferences shared = get(context);
         if (shared != slot && shared.contains(scoped)) return shared.getInt(scoped, fallback);
@@ -237,8 +339,14 @@ final class AppPreferences {
 
     static boolean displayBoolean(Context context, boolean secondary, String key,
                                   boolean fallback) {
-        String scoped = displayKey(key, secondary);
         SharedPreferences slot = displaySlotStore(context, secondary);
+        if (isStyleScopedKey(key)) {
+            String styled = styleScopedKey(key, secondary, displayStyle(context, secondary));
+            if (slot.contains(styled)) return slot.getBoolean(styled, fallback);
+            SharedPreferences shared = get(context);
+            if (shared != slot && shared.contains(styled)) return shared.getBoolean(styled, fallback);
+        }
+        String scoped = displayKey(key, secondary);
         if (slot.contains(scoped)) return slot.getBoolean(scoped, fallback);
         SharedPreferences shared = get(context);
         if (shared != slot && shared.contains(scoped)) return shared.getBoolean(scoped, fallback);
@@ -246,8 +354,14 @@ final class AppPreferences {
     }
 
     static String displayString(Context context, boolean secondary, String key, String fallback) {
-        String scoped = displayKey(key, secondary);
         SharedPreferences slot = displaySlotStore(context, secondary);
+        if (isStyleScopedKey(key)) {
+            String styled = styleScopedKey(key, secondary, displayStyle(context, secondary));
+            if (slot.contains(styled)) return slot.getString(styled, fallback);
+            SharedPreferences shared = get(context);
+            if (shared != slot && shared.contains(styled)) return shared.getString(styled, fallback);
+        }
+        String scoped = displayKey(key, secondary);
         if (slot.contains(scoped)) return slot.getString(scoped, fallback);
         SharedPreferences shared = get(context);
         if (shared != slot && shared.contains(scoped)) return shared.getString(scoped, fallback);
@@ -256,17 +370,53 @@ final class AppPreferences {
 
     static void putDisplayInt(Context context, boolean secondary, String key, int value) {
         displaySlotStore(context, secondary).edit()
-                .putInt(displayKey(key, secondary), value).apply();
+                .putInt(displayWriteKey(context, secondary, key), value).apply();
     }
 
     static void putDisplayBoolean(Context context, boolean secondary, String key, boolean value) {
         displaySlotStore(context, secondary).edit()
-                .putBoolean(displayKey(key, secondary), value).apply();
+                .putBoolean(displayWriteKey(context, secondary, key), value).apply();
     }
 
     static void putDisplayString(Context context, boolean secondary, String key, String value) {
         displaySlotStore(context, secondary).edit()
-                .putString(displayKey(key, secondary), value).apply();
+                .putString(displayWriteKey(context, secondary, key), value).apply();
+    }
+
+    /**
+     * 把当前样式下**用户改过**的共用显示参数复制到本屏的其它样式（issue #39 的批量入口）。
+     *
+     * <p>只复制显式存在于当前样式下的项：没调过的项继续继承本屏共用值，不至于一次性把所有样式
+     * 都写死，之后改共用设置也不会失灵。
+     *
+     * @return 复制的项数
+     */
+    static int applyCurrentStyleToOtherStyles(Context context, boolean secondary) {
+        String source = displayStyle(context, secondary);
+        SharedPreferences slot = displaySlotStore(context, secondary);
+        SharedPreferences.Editor editor = slot.edit();
+        int copied = 0;
+        for (String key : STYLE_SCOPED_KEYS) {
+            String sourceKey = styleScopedKey(key, secondary, source);
+            if (!slot.contains(sourceKey)) continue;
+            Object value = slot.getAll().get(sourceKey);
+            if (value == null) continue;
+            for (String style : OVERLAY_STYLES) {
+                if (style.equals(source)) continue;
+                putPreference(editor, styleScopedKey(key, secondary, style), value);
+                copied++;
+            }
+        }
+        editor.apply();
+        return copied;
+    }
+
+    private static void putPreference(SharedPreferences.Editor editor, String key, Object value) {
+        if (value instanceof Boolean) editor.putBoolean(key, (Boolean) value);
+        else if (value instanceof Integer) editor.putInt(key, (Integer) value);
+        else if (value instanceof Float) editor.putFloat(key, (Float) value);
+        else if (value instanceof Long) editor.putLong(key, (Long) value);
+        else if (value instanceof String) editor.putString(key, (String) value);
     }
 
     /**
@@ -290,10 +440,15 @@ final class AppPreferences {
         return displayInt(context, secondary, KEY_TEXT_SCALE, 100) / 100f;
     }
 
+    /**
+     * Transport controls for one screen. The secondary used to read the bare key while the
+     * settings page wrote the {@code _secondary} one, so the switch never reached the renderer
+     * (issue #30); going through {@link #displayBoolean} keeps reader and writer aligned, and the
+     * fallback still honours a legacy bare key from very old installs.
+     */
     static boolean showPlaybackControls(Context context, boolean secondary) {
         return !secondary
-                || displaySlotStore(context, secondary)
-                .getBoolean(KEY_SECONDARY_PLAYBACK_CONTROLS, false);
+                || displayBoolean(context, secondary, KEY_SECONDARY_PLAYBACK_CONTROLS, false);
     }
 
     static int titleScale(Context context, boolean secondary) {
@@ -301,14 +456,76 @@ final class AppPreferences {
                 displayInt(context, secondary, KEY_TITLE_SCALE, 100)));
     }
 
+    /**
+     * Requested theme: {@code light}, {@code dark} or {@code auto} (follow the system). The
+     * scheduled dark window is a separate switch; see {@link #themeScheduleEnabled}.
+     */
     static String themeMode(Context context) {
         String value = get(context).getString(KEY_THEME_MODE, "auto");
+        // "schedule" was briefly a mode of its own; it is now the switch below with mode auto.
+        if ("schedule".equals(value)) return "auto";
         return "light".equals(value) || "dark".equals(value) ? value : "auto";
     }
 
     static void setThemeMode(Context context, String value) {
         String normalized = "light".equals(value) || "dark".equals(value) ? value : "auto";
         get(context).edit().putString(KEY_THEME_MODE, normalized).apply();
+    }
+
+    /**
+     * 可选的时间段：打开后按下面的深色时段自动切换深浅色；关掉就按主题模式（跟随系统 / 白天 /
+     * 夜晚）判断（issue #34）。
+     */
+    static boolean themeScheduleEnabled(Context context) {
+        if (get(context).contains(KEY_THEME_SCHEDULE_ENABLED)) {
+            return get(context).getBoolean(KEY_THEME_SCHEDULE_ENABLED, false);
+        }
+        // 旧版本把"按时间段"存在主题模式里：迁移成开关打开 + 模式跟随系统。
+        return "schedule".equals(get(context).getString(KEY_THEME_MODE, "auto"));
+    }
+
+    static void setThemeScheduleEnabled(Context context, boolean enabled) {
+        android.content.SharedPreferences.Editor editor = get(context).edit()
+                .putBoolean(KEY_THEME_SCHEDULE_ENABLED, enabled);
+        if (enabled && "schedule".equals(get(context).getString(KEY_THEME_MODE, "auto"))) {
+            editor.putString(KEY_THEME_MODE, "auto");
+        }
+        editor.apply();
+    }
+
+    /** Minute of the day the scheduled dark theme starts; 19:00 by default. */
+    static int themeScheduleStartMinute(Context context) {
+        return Math.max(0, Math.min(24 * 60 - 1,
+                get(context).getInt(KEY_THEME_SCHEDULE_START_MINUTE, 19 * 60)));
+    }
+
+    static void setThemeScheduleStartMinute(Context context, int value) {
+        get(context).edit().putInt(KEY_THEME_SCHEDULE_START_MINUTE, value).apply();
+    }
+
+    /** Minute of the day the scheduled dark theme ends; 07:00 by default. */
+    static int themeScheduleEndMinute(Context context) {
+        return Math.max(0, Math.min(24 * 60 - 1,
+                get(context).getInt(KEY_THEME_SCHEDULE_END_MINUTE, 7 * 60)));
+    }
+
+    static void setThemeScheduleEndMinute(Context context, int value) {
+        get(context).edit().putInt(KEY_THEME_SCHEDULE_END_MINUTE, value).apply();
+    }
+
+    /**
+     * The theme in effect right now. {@code auto} is left to the caller (it asks the system for
+     * the night mode); when the optional scheduled window is switched on, its verdict wins over
+     * the system so a head unit that never reports night mode can still go dark in the evening
+     * (issue #34).
+     */
+    static String resolvedThemeMode(Context context) {
+        String mode = themeMode(context);
+        if ("light".equals(mode) || "dark".equals(mode)) return mode;
+        if (!themeScheduleEnabled(context)) return "auto";
+        int minute = DayNightSchedule.minuteOfDay(System.currentTimeMillis());
+        return DayNightSchedule.isDarkMinute(minute, themeScheduleStartMinute(context),
+                themeScheduleEndMinute(context)) ? "dark" : "light";
     }
 
     /** Disabled by default so switching the settings theme does not recolor overlays. */
@@ -429,6 +646,68 @@ final class AppPreferences {
     static int previousLyricOpacity(Context context, boolean secondary) {
         return Math.max(0, Math.min(100,
                 displayInt(context, secondary, KEY_PREVIOUS_LYRIC_OPACITY, 100)));
+    }
+
+    /**
+     * 上一句字号, as a share of the current line. The default reproduces the size the style used
+     * to hard-code (12dp against the current line's 22dp), so existing installs look unchanged
+     * (issue #38).
+     */
+    static int previousLyricScale(Context context, boolean secondary) {
+        return Math.max(45, Math.min(160,
+                displayInt(context, secondary, KEY_PREVIOUS_LYRIC_SCALE, 55)));
+    }
+
+    /**
+     * 内容垂直对齐: {@code ""} keeps the style's own placement, otherwise "top", "center" or
+     * "bottom" (issue #41). A panel dragged to the screen edge used to keep a strip of empty
+     * space above the text because the rows were pinned to fixed baselines.
+     */
+    static String contentAlign(Context context, boolean secondary) {
+        String value = displayString(context, secondary, KEY_CONTENT_ALIGN, "");
+        return "top".equals(value) || "center".equals(value) || "bottom".equals(value)
+                ? value : "";
+    }
+
+    /** 面板圆角占短边的百分比；{@code -1} 表示跟随样式原本的圆角（issue #37）。 */
+    static int cornerRadiusPercent(Context context, boolean secondary) {
+        return Math.max(-1, Math.min(50,
+                displayInt(context, secondary, KEY_CORNER_RADIUS_PERCENT, -1)));
+    }
+
+    /** 圆形封面（紧凑 / AMLL 用）；Refined 有它自己的「方形专辑封面」开关（issue #22）。 */
+    static boolean roundCover(Context context, boolean secondary) {
+        return displayBoolean(context, secondary, KEY_ROUND_COVER, false);
+    }
+
+    /** 圆形封面按播放进度旋转，暂停即停（issue #22）。 */
+    static boolean coverRotation(Context context, boolean secondary) {
+        return displayBoolean(context, secondary, KEY_COVER_ROTATION, false);
+    }
+
+    /** 封面转一圈需要的秒数；20 秒 ≈ 3 转/分，接近黑胶。 */
+    static int coverRotationPeriodSeconds(Context context, boolean secondary) {
+        return Math.max(3, Math.min(60,
+                displayInt(context, secondary, KEY_COVER_ROTATION_PERIOD_SECONDS, 20)));
+    }
+
+    /** 「正在匹配歌词」用动画而不是一行静止文字（issue #45）。 */
+    static boolean matchingAnimation(Context context, boolean secondary) {
+        return displayBoolean(context, secondary, KEY_MATCHING_ANIMATION, true);
+    }
+
+    /** 匹配耗时超过这么久才显示动画，0 表示立刻显示；默认 3 秒，避免瞬间匹配成功时闪一下。 */
+    static int matchingAnimationDelayMs(Context context, boolean secondary) {
+        return Math.max(0, Math.min(10_000,
+                displayInt(context, secondary, KEY_MATCHING_ANIMATION_DELAY, 3_000)));
+    }
+
+    /**
+     * 没有逐字时间轴时按本句时长估算逐字进度（issue #21）。默认关闭：估算在长音、拖腔与行内
+     * 停顿上会偏，愿意接受这种偏差的用户可以打开，让普通 .lrc 也有逐字变色的观感。
+     */
+    static boolean estimatedWordKaraoke(Context context, boolean secondary) {
+        return displayBoolean(context, secondary, KEY_ESTIMATED_WORD_KARAOKE, false);
     }
 
     static boolean previousLyricParticles(Context context, boolean secondary) {
@@ -1184,6 +1463,15 @@ final class AppPreferences {
         return get(context).getBoolean(KEY_HIDE_OVERLAYS_IN_PLAYER, false);
     }
 
+    /** 匹配到的歌词长时间不滚动时改用播放器实时歌词；默认开启（issue #44）。 */
+    static boolean stuckLyricFallback(Context context) {
+        return get(context).getBoolean(KEY_STUCK_LYRIC_FALLBACK, true);
+    }
+
+    static void setStuckLyricFallback(Context context, boolean enabled) {
+        get(context).edit().putBoolean(KEY_STUCK_LYRIC_FALLBACK, enabled).apply();
+    }
+
     static Set<String> hiddenOverlayApps(Context context) {
         Set<String> stored = get(context).getStringSet(KEY_HIDE_OVERLAYS_IN_APPS,
                 Collections.emptySet());
@@ -1201,6 +1489,41 @@ final class AppPreferences {
 
     static boolean hideSelectedAppsOnSecondary(Context context) {
         return get(context).getBoolean(KEY_HIDE_SELECTED_APPS_ON_SECONDARY, true);
+    }
+
+    /**
+     * 「指定应用」规则的方向（issue #43）：{@code false} = 黑名单（名单内的应用里隐藏），
+     * {@code true} = 白名单（只在名单内的应用里显示）。白名单每屏独立，因为主屏与副屏想在
+     * 哪些应用里显示往往不一样。
+     */
+    static boolean appRuleWhitelist(Context context, boolean secondary) {
+        return get(context).getBoolean(secondary
+                ? KEY_APP_RULE_WHITELIST_SECONDARY : KEY_APP_RULE_WHITELIST_MAIN, false);
+    }
+
+    static void setAppRuleWhitelist(Context context, boolean secondary, boolean value) {
+        get(context).edit().putBoolean(secondary
+                ? KEY_APP_RULE_WHITELIST_SECONDARY : KEY_APP_RULE_WHITELIST_MAIN, value).apply();
+    }
+
+    /**
+     * 这些应用发布的媒体元数据会被忽略（issue #35）。车机自带的媒体中心、导航或蓝牙通道常常
+     * 抢走歌词，把它们列进来就不会再顶掉正在播放的播放器。
+     */
+    static Set<String> ignoredPlayerPackages(Context context) {
+        Set<String> stored = get(context).getStringSet(KEY_IGNORED_PLAYER_PACKAGES,
+                Collections.emptySet());
+        return stored == null ? new LinkedHashSet<>() : new LinkedHashSet<>(stored);
+    }
+
+    static void setIgnoredPlayerPackages(Context context, Set<String> packages) {
+        get(context).edit().putStringSet(KEY_IGNORED_PLAYER_PACKAGES,
+                packages == null ? Collections.emptySet() : new LinkedHashSet<>(packages)).apply();
+    }
+
+    static boolean ignoredPlayerPackage(Context context, String packageName) {
+        if (packageName == null || packageName.trim().isEmpty()) return false;
+        return ignoredPlayerPackages(context).contains(packageName.trim());
     }
 
     static boolean notificationLyrics(Context context) {
@@ -1357,6 +1680,22 @@ final class AppPreferences {
 
     static void setTopLyricPreviousOpacity(Context context, int value) {
         setTopLyricInt(context, KEY_TOP_LYRIC_PREVIOUS_OPACITY, value);
+    }
+
+    /**
+     * 顶部歌词条的「下一句字号」。The strip used to read the main screen's value, so tuning the
+     * strip's own next line also changed the main overlay (issue #19). Unset follows the main
+     * screen, so an installation that never touched this page looks exactly as before.
+     */
+    static int topLyricNextFontScale(Context context) {
+        return get(context).contains(KEY_TOP_LYRIC_NEXT_FONT_SCALE)
+                ? Math.max(45, Math.min(160,
+                get(context).getInt(KEY_TOP_LYRIC_NEXT_FONT_SCALE, 100)))
+                : nextLyricScale(context, false);
+    }
+
+    static void setTopLyricNextFontScale(Context context, int value) {
+        setTopLyricInt(context, KEY_TOP_LYRIC_NEXT_FONT_SCALE, value);
     }
 
     static void setTopLyricInt(Context context, String key, int value) {

@@ -16,6 +16,8 @@ final class MusicStateStore {
     private static final Object LOCK = new Object();
     private static final ExecutorService LYRIC_EXECUTOR = Executors.newCachedThreadPool();
     private static final ExecutorService ART_EXECUTOR = Executors.newSingleThreadExecutor();
+    /** One arbitration line per channel change; the debounce inside the arbiter bounds the rest. */
+    private static final long SOURCE_LOG_INTERVAL_MS = 2_000L;
 
     private static Context appContext;
     private static MultiSourceLyricClient lyricClient;
@@ -47,6 +49,10 @@ final class MusicStateStore {
     private static boolean usingSessionTimeline;
     private static boolean sessionTimelineAllowed = true;
     private static boolean notificationProgressUnknown;
+    private static final SessionChannelArbiter CHANNEL_ARBITER = new SessionChannelArbiter();
+    /** Watches a matched timeline for "matched but will not scroll" (issue #44). */
+    private static final StuckLineDetector STUCK_LINE_DETECTOR = new StuckLineDetector();
+    private static long lastSourceLogElapsedMs;
 
     private MusicStateStore() {}
 
@@ -108,6 +114,27 @@ final class MusicStateStore {
         String playbackStateForLog = "";
         synchronized (LOCK) {
             boolean sameSource = TextUtils.equals(source, normalizedSource);
+            long now = SystemClock.elapsedRealtime();
+            // A Bluetooth AVRCP broadcast and a MediaSession publisher (CarPlay and friends) can
+            // both describe the same playback. Letting each write through swaps the track key on
+            // every broadcast, which drops the lyric timeline and redraws the panel — the reported
+            // flicker. Only one channel owns the state; the other is ignored until it wins.
+            SessionChannelArbiter.Signal incomingSignal = SessionChannelArbiter.Signal.of(
+                    normalizedSource, normalizedSourcePackage, data);
+            SessionChannelArbiter.Decision decision = CHANNEL_ARBITER.decide(incomingSignal, now);
+            if (decision.startsFlap) {
+                DiagnosticLog.record(context, "Playback", "active source flapping from="
+                        + decision.flapFrom + " to=" + decision.flapTo
+                        + " kept=" + decision.signal.describe()
+                        + " holdMs=" + SessionChannelArbiter.HOLD_MS);
+            } else if (decision.accepted && !"same_publisher".equals(decision.reason)
+                    && now - lastSourceLogElapsedMs >= SOURCE_LOG_INTERVAL_MS) {
+                lastSourceLogElapsedMs = now;
+                DiagnosticLog.record(context, "Playback", "active source " + decision.reason
+                        + " source=" + normalizedSource + " package="
+                        + normalizedSourcePackage);
+            }
+            if (!decision.accepted) return;
             boolean netEaseUnsupported = isNetEaseAutoScrollUnsupported(
                     normalizedSource, rawTitle);
             if (netEaseUnsupported && sameSource && !TextUtils.isEmpty(title)) {
@@ -154,7 +181,6 @@ final class MusicStateStore {
                     newDuration, newMediaId, selectedCatalog, playerCatalogFallback);
             boolean changed = !TextUtils.equals(trackKey, newTrackKey)
                     || !TextUtils.equals(sourcePackage, normalizedSourcePackage);
-            long now = SystemClock.elapsedRealtime();
             long estimatedPosition = currentPositionLocked();
             boolean reportedPositionChanged = !changed
                     && hasMeaningfulPositionChange(lastReportedPositionMs, newPosition);
@@ -211,6 +237,7 @@ final class MusicStateStore {
                 usingSessionTimeline = false;
                 sessionTimelineAllowed = true;
                 timeline = LrcTimeline.EMPTY;
+                trackTimelineLocked(timeline);
                 lyricLoadFinished = false;
                 lyricSourceName = "";
                 liveSessionLyric = "";
@@ -222,6 +249,7 @@ final class MusicStateStore {
             if (netEaseUnsupported) {
                 netEaseAutoScrollUnsupported = true;
                 timeline = LrcTimeline.EMPTY;
+                trackTimelineLocked(timeline);
                 lyricLoadFinished = true;
                 lyricSourceName = "";
                 liveSessionLyric = "";
@@ -231,6 +259,7 @@ final class MusicStateStore {
                 netEaseAutoScrollUnsupported = false;
                 if (wasNetEaseUnsupported && !changed) {
                     timeline = LrcTimeline.EMPTY;
+                    trackTimelineLocked(timeline);
                     lyricLoadFinished = false;
                     lyricSourceName = "";
                     liveSessionLyric = "";
@@ -249,6 +278,7 @@ final class MusicStateStore {
                     || "kuwo".equals(selectedCatalog)) && !data.sessionTimeline.isEmpty()) {
                 if (timeline != data.sessionTimeline) {
                     timeline = data.sessionTimeline;
+                    trackTimelineLocked(timeline);
                     lyricSourceName = "酷我播放器歌词";
                     lyricLoadFinished = true;
                     usingSessionTimeline = true;
@@ -324,6 +354,7 @@ final class MusicStateStore {
             playbackSpeed = 0f;
             trackKey = "";
             timeline = LrcTimeline.EMPTY;
+            trackTimelineLocked(timeline);
             lyricLoadFinished = false;
             lyricSourceName = "";
             liveSessionLyric = "";
@@ -331,6 +362,7 @@ final class MusicStateStore {
             trackGeneration++;
             usingSessionTimeline = false;
             sessionTimelineAllowed = true;
+            CHANNEL_ARBITER.reset();
             cancelLyricLoadLocked();
         }
         if (appContext != null) AudioSpectrumSource.setPlaybackActive(appContext, false);
@@ -352,10 +384,27 @@ final class MusicStateStore {
         }
     }
 
+    /**
+     * Whether a write would win channel arbitration, without writing anything. The notification
+     * listener asks before it remembers a player package or logs an active-player change, so a
+     * write that {@link #update} is about to reject leaves no side effects behind. Informational
+     * only: {@code update} always decides again and is the authority.
+     */
+    static boolean isChannelAccepted(String newSource, String newSourcePackage,
+                                     MusicPlaybackData data) {
+        if (data == null) return true;
+        synchronized (LOCK) {
+            long now = SystemClock.elapsedRealtime();
+            return CHANNEL_ARBITER.wouldAccept(SessionChannelArbiter.Signal.of(
+                    TextUtils.isEmpty(newSource) ? "media" : newSource,
+                    newSourcePackage == null ? "" : newSourcePackage.trim(), data), now);
+        }
+    }
+
     static MusicSnapshot snapshotForLyricBrowse(int lyricOffsetMs, long lyricPositionMs) {
         synchronized (LOCK) {
             long position = Math.max(0L, lyricPositionMs - lyricOffsetMs);
-            return snapshotLocked(position, Math.max(0L, lyricPositionMs));
+            return snapshotLocked(position, Math.max(0L, lyricPositionMs), false);
         }
     }
 
@@ -366,16 +415,81 @@ final class MusicStateStore {
     }
 
     private static MusicSnapshot snapshotLocked(long position, long lyricPosition) {
-        boolean catalogLyricAvailable = !timeline.isEmpty();
+        return snapshotLocked(position, lyricPosition, true);
+    }
+
+    /**
+     * @param observePlayback false for the lyric browser, which scrubs an arbitrary position: those
+     *                        synthetic positions must not feed the stuck-line detection.
+     */
+    private static MusicSnapshot snapshotLocked(long position, long lyricPosition,
+                                                boolean observePlayback) {
+        LrcTimeline.At catalogAt = timeline.at(lyricPosition);
         boolean liveLyricAvailable = isLiveSessionLyricFallbackAvailable(source,
                 lyricLoadFinished, timeline, liveSessionLyric);
+        if (!liveLyricAvailable && observePlayback) {
+            // The matched timeline is the one on screen: only now can "it never scrolls" (issue #44)
+            // apply. A true result hands the display to the live lyric below, exactly like the
+            // existing "nothing matched" fallback does. The playback clock is the unshifted
+            // position, so a lyric offset cannot look like a seek.
+            liveLyricAvailable = observeStuckLineLocked(catalogAt.lineStartMs, position,
+                    SystemClock.elapsedRealtime());
+        }
+        boolean catalogLyricAvailable = !timeline.isEmpty();
         LrcTimeline.At at = liveLyricAvailable
-                ? LrcTimeline.liveLine(liveSessionLyric) : timeline.at(lyricPosition);
+                ? LrcTimeline.liveLine(liveSessionLyric) : catalogAt;
         String displayedLyricSource = liveLyricAvailable
                 ? liveSessionLyricSourceName(source) : lyricSourceName;
         return new MusicSnapshot(active, playing, sourceName, title, artist, albumArt, durationMs,
                 position, lyricLoadFinished, catalogLyricAvailable || liveLyricAvailable,
                 displayedLyricSource, at);
+    }
+
+    /**
+     * Feeds one frame to the stuck-line detection and answers whether the matched timeline has to
+     * be given up (issue #44).
+     *
+     * <p>Returns {@code false} — leaving the behaviour of every snapshot untouched — while the
+     * preference is off, and while no timeline is matched (that case already falls back). A
+     * verdict is written to the diagnostic log once per timeline.</p>
+     *
+     * @param lineId     start timestamp of the line the timeline shows, its identity
+     * @param positionMs the real playback position, which the stuck clock is measured against
+     */
+    private static boolean observeStuckLineLocked(long lineId, long positionMs,
+                                                  long nowElapsedMs) {
+        if (timeline.isEmpty() || appContext == null
+                || !AppPreferences.stuckLyricFallback(appContext)) return false;
+        STUCK_LINE_DETECTOR.onFrame(StuckLineDetector.Signal.of(lineId, positionMs,
+                liveSessionLyric, playing, durationMs, nowElapsedMs));
+        if (!STUCK_LINE_DETECTOR.timelineUnusable()) return false;
+        if (STUCK_LINE_DETECTOR.consumeFallbackNotice()) {
+            DiagnosticLog.record(appContext, "Lyrics", STUCK_LINE_DETECTOR.describe());
+        }
+        return true;
+    }
+
+    /**
+     * Points the stuck-line detection at the timeline now in play. Called wherever {@code timeline}
+     * is replaced — including with {@code LrcTimeline.EMPTY} — so a verdict is never carried over
+     * to a different match.
+     */
+    private static void trackTimelineLocked(LrcTimeline value) {
+        STUCK_LINE_DETECTOR.onTimeline(value == null ? 0 : value.lineCount(),
+                timelineSpanMs(value));
+    }
+
+    /**
+     * Total span of a timeline: the last line's start plus how long that line is shown.
+     * {@link LrcTimeline} exposes no total duration, so the last line is located with
+     * {@code at(Long.MAX_VALUE)}, where a missing per-line duration already falls back to the 5 s
+     * hold. The value only feeds the coarse {@link StuckLineDetector#DURATION_RATIO}× comparison,
+     * so that approximation does not matter.
+     */
+    private static long timelineSpanMs(LrcTimeline value) {
+        if (value == null || value.isEmpty()) return 0L;
+        LrcTimeline.At last = value.at(Long.MAX_VALUE);
+        return last.lineStartMs + Math.max(0L, last.lineDurationMs);
     }
 
     static void reloadLyrics(Context context) {
@@ -422,6 +536,7 @@ final class MusicStateStore {
                     requestedDuration, mediaId, selectedCatalog,
                     playerCatalogFallback);
             timeline = LrcTimeline.EMPTY;
+            trackTimelineLocked(timeline);
             lyricLoadFinished = false;
             lyricSourceName = "";
             liveSessionLyric = "";
@@ -465,6 +580,9 @@ final class MusicStateStore {
                     + "\nsourceId=" + source
                     + "\nsourcePackage=" + sourcePackage
                     + "\nmediaIdPresent=" + !TextUtils.isEmpty(mediaId)
+                    // 内嵌歌词完全依赖播放器给的 mediaUri：这一行让"拿不到路径"和"文件里没有标签"
+                    // 一眼可分（issue #25）。
+                    + "\nmediaUriPresent=" + !TextUtils.isEmpty(mediaUri)
                     + "\nalbumArtLoaded=" + (albumArt != null)
                     + "\nalbumArtUriPresent=" + !TextUtils.isEmpty(albumArtUri)
                     + "\nloadingAlbumArt=" + !TextUtils.isEmpty(loadingAlbumArtUri)
@@ -513,6 +631,7 @@ final class MusicStateStore {
                             return;
                         }
                         timeline = result.timeline;
+                        trackTimelineLocked(timeline);
                         lyricSourceName = result.sourceName;
                         lyricLoadFinished = true;
                         if ("local".equals(result.providerId)) {
@@ -776,9 +895,22 @@ final class MusicStateStore {
     static boolean isLiveSessionLyricFallbackAvailable(String source, boolean loadFinished,
                                                         LrcTimeline catalogTimeline,
                                                         String liveLyric) {
+        return isLiveSessionLyricFallbackAvailable(source, loadFinished, catalogTimeline,
+                liveLyric, false);
+    }
+
+    /**
+     * @param timelineUnusable the matched timeline was rejected by {@link StuckLineDetector}
+     *                         (issue #44): "matched but it never scrolls" now falls back exactly
+     *                         like "nothing matched" does. Callers that do not run the detection
+     *                         pass {@code false} and keep the original behaviour.
+     */
+    static boolean isLiveSessionLyricFallbackAvailable(String source, boolean loadFinished,
+                                                        LrcTimeline catalogTimeline,
+                                                        String liveLyric, boolean timelineUnusable) {
         if ("dftc_media".equals(source)) return !TextUtils.isEmpty(liveLyric);
         return usesLiveTitleMetadata(source) && (loadFinished || "soda".equals(source))
-                && (catalogTimeline == null || catalogTimeline.isEmpty())
+                && (timelineUnusable || catalogTimeline == null || catalogTimeline.isEmpty())
                 && !TextUtils.isEmpty(liveLyric);
     }
 

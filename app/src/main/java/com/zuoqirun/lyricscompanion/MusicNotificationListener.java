@@ -142,15 +142,22 @@ public final class MusicNotificationListener extends NotificationListenerService
 
     private void acceptSession(String packageName, String applicationLabel,
                                MusicPlaybackData data) {
+        String nextPackage = packageName == null ? "" : packageName;
+        // 用户把某个应用列进「忽略这些应用的媒体元数据」后，它的发布不再进入歌词状态（issue #35）：
+        // 车机自带媒体中心、导航或蓝牙通道抢歌词时，直接忽略掉它。
+        if (AppPreferences.ignoredPlayerPackage(this, nextPackage)) return;
+        MusicAppRegistry.App app = MusicAppRegistry.resolve(packageName, applicationLabel);
+        // Channel arbitration happens inside MusicStateStore. Ask first so a write it is about to
+        // drop does not leave the remembered player package or the active-player log pointing at a
+        // channel that lost the slot.
+        if (!MusicStateStore.isChannelAccepted(app.sourceId, nextPackage, data)) return;
         notificationSessionActive = false;
         lastNonEmptySessionElapsedMs = SystemClock.elapsedRealtime();
-        String nextPackage = packageName == null ? "" : packageName;
         if (!nextPackage.equals(activePlayerPackageName)) {
             DiagnosticLog.record(this, "MediaSession",
                     "active player changed package=" + nextPackage + " label=" + applicationLabel);
         }
         activePlayerPackageName = nextPackage;
-        MusicAppRegistry.App app = MusicAppRegistry.resolve(packageName, applicationLabel);
         AppPreferences.rememberPlayerPackage(this, nextPackage);
         MusicStateStore.update(this, app.sourceId, app.displayName, nextPackage, data);
     }

@@ -30,6 +30,9 @@ public final class ColorSettingsActivity extends AppCompatActivity implements Di
     private int selectedScope;
     /** Which screen the colors currently on show belong to; 0 for the top strip's own palette. */
     private int displaySlot;
+    /** 页内实时预览与它的容器（issue #24）。 */
+    private LinearLayout previewHost;
+    private LyricsPanelView colorPreview;
 
     @Override public SharedPreferences displaySlotPreferences() {
         return DisplaySlotContext.preferencesFor(this, displaySlot);
@@ -56,6 +59,13 @@ public final class ColorSettingsActivity extends AppCompatActivity implements Di
         toolbar.setNavigationIcon(android.R.drawable.ic_menu_close_clear_cancel);
         toolbar.setNavigationOnClickListener(v -> finish());
         root.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(70)));
+
+        // 页内实时预览（issue #24）。
+        previewHost = new LinearLayout(this);
+        previewHost.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(-1, -2);
+        previewParams.topMargin = dp(8);
+        root.addView(previewHost, previewParams);
 
         LinearLayout rules = card("颜色规则");
         MaterialSwitch followLyrics = toggle("主屏与副屏歌词跟随深浅环境",
@@ -133,6 +143,7 @@ public final class ColorSettingsActivity extends AppCompatActivity implements Di
         if (root == null) return;
         if (colorHost != null) root.removeView(colorHost);
         displaySlot = displaySlotForScope(selectedScope);
+        rebuildPreview();
         colorHost = card(selectedScope == 0 ? "主屏颜色"
                 : selectedScope == 1 ? "副屏颜色"
                 : selectedScope == 2 ? "顶部歌词条颜色"
@@ -275,6 +286,21 @@ public final class ColorSettingsActivity extends AppCompatActivity implements Di
     private void changed() {
         AppPreferences.changed(this);
         LyricsDisplayService.refreshSecondary(this);
+        // 页内实时预览（issue #24）：改颜色、描边、背景都立刻在预览里看到，不必回总览页。
+        if (colorPreview != null) colorPreview.reloadStyle();
+    }
+
+    /**
+     * 页内实时预览（issue #24）：按当前编辑的区域（主屏 / 副屏 / 顶部歌词条 / 某块附加屏）建一个
+     * 小尺寸 LyricsPanelView，改颜色时 {@link #changed()} 会让它重新读一遍样式。
+     */
+    private void rebuildPreview() {
+        if (previewHost == null) return;
+        previewHost.removeAllViews();
+        colorPreview = selectedScope == 2
+                ? new LyricsPanelView(this, false, false, true)
+                : new LyricsPanelView(this, displaySlot > DisplaySlotRegistry.MAIN_SLOT);
+        previewHost.addView(colorPreview, new LinearLayout.LayoutParams(-1, dp(140)));
     }
 
     private MaterialSwitch toggle(String title, boolean checked) {

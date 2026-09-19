@@ -748,6 +748,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                     AppPreferences.KEY_OVERLAY_POSITION_LOCKED, !locked);
             popup.dismiss();
             applyOverlayInteraction(secondary);
+            if (!locked) notifyPassThroughDimming();
         });
         addQuickMenuButton(content, "锁定并触摸穿透", () -> {
             popup.dismiss();
@@ -815,6 +816,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         }
         AppPreferences.putOverlayTouchThrough(this, secondary, enabled);
         applyOverlayInteraction(secondary);
+        if (enabled) notifyPassThroughDimming();
     }
 
     /**
@@ -863,7 +865,8 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         }
         DiagnosticLog.record(this, "Overlay", (passThrough
                 ? (touchThrough ? "touch through" : "position locked, controls kept")
-                : "touch through disabled") + " " + (secondary ? "secondary" : "main"));
+                : "touch through disabled") + " " + (secondary ? "secondary" : "main")
+                + " alpha=" + params.alpha);
     }
 
     /**
@@ -997,11 +1000,35 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         AppPreferences.putDisplayBoolean(this, secondary,
                 AppPreferences.KEY_OVERLAY_POSITION_LOCKED, false);
         applyOverlayInteraction(secondary);
+        // The × sits right next to the lyrics, so it gets tapped by accident while reaching for
+        // them. Say what just happened instead of silently clearing both switches (issue #36);
+        // the extra screens already announce their own unlock the same way.
+        SafeToast.show(this, "已解除位置锁定与触摸穿透", android.widget.Toast.LENGTH_SHORT);
+    }
+
+    /**
+     * Android 12 and later block touches that pass through a window which is not (nearly)
+     * transparent, so a pass-through overlay has to give up five hundredths of its opacity. The
+     * lyrics then look dimmer than the user's own 背景不透明度 asks for, which is worth a word
+     * instead of leaving them to guess (issue #32). Below Android 12 nothing changes.
+     */
+    private void notifyPassThroughDimming() {
+        if (touchThroughWindowAlpha() >= 1f) return;
+        SafeToast.show(this, "Android 12 及以上要求穿透窗口的不透明度低于 80%，"
+                        + "所以整窗（包括歌词）会比平时略暗；这是系统限制，关掉锁定/穿透即恢复。",
+                android.widget.Toast.LENGTH_LONG);
     }
 
     private static float touchThroughWindowAlpha() {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? 0.79f : 1f;
     }
+
+    /**
+     * One tap only arms the × handle, a second tap inside {@link #EXIT_CONFIRM_MS} leaves
+     * pass-through. It used to exit on the first touch, which is exactly what happens when the
+     * user reaches for the lyrics and hits the handle instead (issue #36).
+     */
+    private static final long EXIT_CONFIRM_MS = 3_000L;
 
     private boolean addUnlockHandle(final boolean secondary) {
         WindowManager manager = secondary ? secondaryWindowManager : mainWindowManager;
@@ -1021,8 +1048,15 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         boolean weakened = "fade".equals(closeMode);
         circle.setColor(weakened ? 0x55202124 : 0xCC202124);
         circle.setStroke(dp(handle.getContext(), 1), weakened ? 0x55FFFFFF : 0xAAFFFFFF);
+        // Armed look for the first tap of the two-tap exit: different enough to be noticed even
+        // when the user did not mean to touch the handle at all (issue #36).
+        final GradientDrawable armedCircle = new GradientDrawable();
+        armedCircle.setShape(GradientDrawable.OVAL);
+        armedCircle.setColor(0xE6FF8A00);
+        armedCircle.setStroke(dp(handle.getContext(), 2), 0xFFFFFFFF);
+        final float restingAlpha = weakened ? 0.42f : 1f;
         handle.setBackground(circle);
-        handle.setAlpha(weakened ? 0.42f : 1f);
+        handle.setAlpha(restingAlpha);
         if ("hidden".equals(closeMode)) handle.setVisibility(View.GONE);
         int size = dp(handle.getContext(), 36);
         int height = size;
@@ -1041,7 +1075,29 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         handleParams.y = clamp(panelParams.y, 0,
                 Math.max(0, displaySize(secondary ? secondaryDisplay
                         : mainWindowManager.getDefaultDisplay()).y - height));
-        handle.setOnClickListener(v -> exitOverlayPassThrough(secondary));
+        final Object armedTag = new Object();
+        handle.setOnClickListener(v -> {
+            if (handle.getTag() == armedTag) {
+                handle.setTag(null);
+                exitOverlayPassThrough(secondary);
+                return;
+            }
+            // A single tap only shows what a second tap would do. The handle sits next to the
+            // lyrics, so tapping it while reaching for them used to reset both lock switches
+            // without a word (issue #36).
+            handle.animate().cancel();
+            handle.setTag(armedTag);
+            handle.setBackground(armedCircle);
+            handle.setAlpha(1f);
+            SafeToast.show(this, "再点一次解除位置锁定与触摸穿透", android.widget.Toast.LENGTH_SHORT);
+            handle.postDelayed(() -> {
+                if (handle.getTag() != armedTag) return;
+                handle.setTag(null);
+                handle.setBackground(circle);
+                handle.setAlpha(restingAlpha);
+                scheduleHandleAutoFade(handle, closeMode, 1_000L);
+            }, EXIT_CONFIRM_MS);
+        });
         try {
             manager.addView(handle, handleParams);
             if (secondary) {
@@ -1051,25 +1107,35 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                 mainUnlockHandle = handle;
                 mainUnlockParams = handleParams;
             }
-            if ("auto_fade".equals(closeMode)) {
-                handle.postDelayed(() -> {
-                    if (handle.getParent() != null) {
-                        handle.animate().alpha(0.42f).setDuration(180L).start();
-                    }
-                }, 2_000L);
-            } else if ("auto_hide".equals(closeMode)) {
-                // Keep the fixed upper-right hit target so a hidden handle can still unlock.
-                handle.postDelayed(() -> {
-                    if (handle.getParent() != null) {
-                        handle.animate().alpha(0f).setDuration(180L).start();
-                    }
-                }, 2_000L);
-            }
+            scheduleHandleAutoFade(handle, closeMode, 2_000L);
         } catch (Throwable error) {
             Log.w(TAG, "Unable to add overlay unlock handle", error);
             return false;
         }
         return true;
+    }
+
+    /**
+     * The "weak"/"hidden" close modes do not show the handle all the time: it fades after a
+     * moment. Re-armed from the two-tap exit so the handle keeps behaving the way that mode asks
+     * for, and skipped while the handle is armed so the invitation stays visible.
+     */
+    private void scheduleHandleAutoFade(TextView handle, String closeMode, long delayMs) {
+        final float target;
+        if ("auto_fade".equals(closeMode)) {
+            target = 0.42f;
+        } else if ("auto_hide".equals(closeMode)) {
+            // Keep the fixed upper-right hit target so a hidden handle can still unlock.
+            target = 0f;
+        } else {
+            return;
+        }
+        handle.postDelayed(() -> {
+            if (handle.getTag() != null) return;
+            if (handle.getParent() != null) {
+                handle.animate().alpha(target).setDuration(180L).start();
+            }
+        }, delayMs);
     }
 
     private void removeUnlockHandle(boolean secondary) {
@@ -1172,6 +1238,9 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         if (entries.isEmpty()) return;
         Display secondary = AppPreferences.secondaryEnabled(this) ? findSecondaryDisplay() : null;
         int secondaryId = secondary == null ? -1 : secondary.getDisplayId();
+        // Screens that already carry a lyric window, for the duplicate-panel check below.
+        List<DisplayIdentity.Screen> showingLyrics = new ArrayList<>();
+        if (secondary != null) showingLyrics.add(screenOf(secondary));
         for (int index = 0; index < entries.size(); index++) {
             int slot = DisplaySlotRegistry.slotFor(index);
             DisplaySlotRegistry.Entry entry = entries.get(index);
@@ -1189,8 +1258,30 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                         + display.getDisplayId() + " already shows lyrics");
                 continue;
             }
+            DisplayIdentity.Screen candidate = screenOf(display);
+            for (DisplayIdentity.Screen other : showingLyrics) {
+                String reason = DisplayIdentity.duplicateReason(other, candidate);
+                if (reason.isEmpty()) continue;
+                // A car can expose one physical panel as two Display channels. Both windows then
+                // draw the same lyrics on top of each other: a second render pass for a slightly
+                // bolder look (issue #23).
+                DiagnosticLog.record(this, "Display", "extra slot " + slot + " looks like a screen "
+                        + "already showing lyrics（" + reason + "）：叠在同一块屏上只是更粗更亮，"
+                        + "还会多跑一遍渲染");
+                break;
+            }
+            showingLyrics.add(candidate);
             showExtra(slot, display);
         }
+    }
+
+    /** One display reduced to what the duplicate-panel check needs (issue #23). */
+    private static DisplayIdentity.Screen screenOf(Display display) {
+        Point size = displaySize(display);
+        android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+        if (display != null) display.getRealMetrics(metrics);
+        return new DisplayIdentity.Screen(display == null ? "" : display.getName(), size.x, size.y,
+                metrics.densityDpi);
     }
 
     private void showExtra(int slot, Display display) {
@@ -1583,31 +1674,57 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         return shouldHideOverlays(snapshot, false);
     }
 
+    /** 「指定应用」这条规则在某一屏上的方向，用于诊断文案（issue #43）。 */
+    private String appRuleMode(boolean secondary) {
+        boolean on = secondary ? AppPreferences.hideSelectedAppsOnSecondary(this)
+                : AppPreferences.hideSelectedAppsOnMain(this);
+        if (!on) return "关闭";
+        return AppPreferences.appRuleWhitelist(this, secondary) ? "白名单" : "黑名单";
+    }
+
     private boolean shouldHideOverlays(MusicSnapshot snapshot, boolean secondary) {
+        return shouldHideOverlays(snapshot, secondary, null);
+    }
+
+    /**
+     * @param foregroundPackage the foreground package to judge with, or {@code null} to look it up
+     */
+    private boolean shouldHideOverlays(MusicSnapshot snapshot, boolean secondary,
+                                       String foregroundPackage) {
         boolean hideInPlayer = AppPreferences.hideOverlaysInPlayer(this);
-        java.util.Set<String> hiddenApps = AppPreferences.hiddenOverlayApps(this);
-        String foregroundPackage = hideInPlayer || !hiddenApps.isEmpty()
-                ? ForegroundAppDetector.foregroundPackage(this) : "";
-        boolean playerInForeground = hideInPlayer && ForegroundAppDetector.samePackage(
-                MusicNotificationListener.activePlayerPackageName(), foregroundPackage);
-        boolean hideOnThisDisplay = secondary
+        boolean appRuleOn = secondary
                 ? AppPreferences.hideSelectedAppsOnSecondary(this)
                 : AppPreferences.hideSelectedAppsOnMain(this);
-        boolean hiddenAppInForeground = hideOnThisDisplay && !foregroundPackage.isEmpty()
-                && hiddenApps.contains(foregroundPackage);
+        boolean whitelist = AppPreferences.appRuleWhitelist(this, secondary);
+        java.util.Set<String> listedApps = AppPreferences.hiddenOverlayApps(this);
+        String foreground = foregroundPackage != null ? foregroundPackage
+                : hideInPlayer || appRuleOn ? ForegroundAppDetector.foregroundPackage(this) : "";
+        boolean playerInForeground = hideInPlayer && ForegroundAppDetector.samePackage(
+                MusicNotificationListener.activePlayerPackageName(), foreground);
+        // 黑名单 / 白名单的判定口径见 AppRuleDecision（issue #43 / #28）。白名单唯一的例外是
+        // 「连使用情况访问都没授权」：那意味着永远识别不到任何前台应用，白名单会把歌词一律藏掉，
+        // 用户只会以为应用坏了；这种可检测的情况按不隐藏处理，设置页与诊断日志都会提示去授权。
+        boolean whitelistUsable = !foreground.isEmpty() || ForegroundAppDetector.hasUsageAccess(this);
+        boolean appRuleSaysHide = AppRuleDecision.hides(appRuleOn, whitelist, whitelistUsable,
+                listedApps, foreground);
         return OverlayPlaybackVisibility.shouldHide(
                 AppPreferences.hideOverlaysWhenNotPlaying(this), snapshot.playing,
-                hideInPlayer, playerInForeground, hiddenAppInForeground);
+                hideInPlayer, playerInForeground, appRuleSaysHide);
     }
 
     private void syncOverlayVisibility(MusicSnapshot snapshot) {
-        boolean hideMain = shouldHideOverlays(snapshot, false);
-        boolean hideSecondary = shouldHideOverlays(snapshot, true);
+        String foreground = ForegroundAppDetector.foregroundPackage(this);
+        boolean hideMain = shouldHideOverlays(snapshot, false, foreground);
+        boolean hideSecondary = shouldHideOverlays(snapshot, true, foreground);
         if (hideMain == overlaysHiddenForPlayback && hideSecondary == secondaryHiddenForPlayback) return;
         overlaysHiddenForPlayback = hideMain;
         secondaryHiddenForPlayback = hideSecondary;
+        // 前台包名与规则方向一起入日志：白名单下"foreground=空 ⇒ 隐藏"正是需要用户能自查的判定
+        // （issue #28 / #43）。
         DiagnosticLog.record(this, "Overlay", "visibility mainHidden=" + hideMain
-                + " secondaryHidden=" + hideSecondary);
+                + " secondaryHidden=" + hideSecondary
+                + " foreground=" + (foreground.isEmpty() ? "空" : foreground)
+                + " 规则=主屏" + appRuleMode(false) + "/副屏" + appRuleMode(true));
         if (hideMain) {
             dismissMain();
             dismissStatusLyricStrip();
@@ -1692,7 +1809,12 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         if (!snapshot.active) return "等待播放器";
         if (snapshot.lyricAvailable && snapshot.lyrics != null
                 && !snapshot.lyrics.lyric.trim().isEmpty()) return snapshot.lyrics.lyric.trim();
-        if (!snapshot.lyricLoaded) return "正在匹配歌词";
+        if (!snapshot.lyricLoaded) {
+            // 面板在匹配中显示歌名 + 发散动画，通知栏说同一件事，避免"面板显示歌名、通知说正在匹配"
+            // 的不一致（issue #45）。
+            return snapshot.title.trim().isEmpty() ? "正在匹配歌词"
+                    : snapshot.title.trim() + "  ·  正在匹配歌词";
+        }
         if (!snapshot.lyricAvailable) return "未匹配到歌词";
         return "等待下一行歌词";
     }

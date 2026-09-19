@@ -6,10 +6,14 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 public class PureLyricLayoutTest {
-    @Test public void sevenLineWindowFillsAtBeginningMiddleAndEnd() {
-        assertEquals(0, PureLyricLayout.windowStart(20, 0, 7));
-        assertEquals(7, PureLyricLayout.windowStart(20, 10, 7));
-        assertEquals(13, PureLyricLayout.windowStart(20, 19, 7));
+    @Test public void windowKeepsTheCurrentLineOnTheSameRowThroughoutTheSong() {
+        // 首句、中间、末句：本句始终落在窗口的第 (count-1)/2 个行位上，缺的行位留空（issue #31）。
+        assertEquals(-3, PureLyricLayout.windowStart(0, 7));
+        assertEquals(7, PureLyricLayout.windowStart(10, 7));
+        assertEquals(16, PureLyricLayout.windowStart(19, 7));
+        assertEquals(0, PureLyricLayout.windowStart(0, 1));
+        assertEquals(-1, PureLyricLayout.windowStart(0, 3));
+        assertEquals(1, PureLyricLayout.windowStart(2, 3));
     }
 
     @Test public void moreLinesReduceCurrentSizeToAvailableHeight() {

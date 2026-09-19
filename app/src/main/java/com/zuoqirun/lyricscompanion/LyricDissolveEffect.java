@@ -14,7 +14,8 @@ import java.util.Arrays;
  * <p>The panel keeps drawing the previous line for many frames, and in the layouts that show a
  * window of lines the same text later moves to an older slot. So the effect also remembers
  * which line identities it has consumed: a line that finished dissolving reports alpha 0
- * forever instead of popping back one slot later.
+ * instead of popping back one slot later. Only a seek backwards forgets that memory — the user
+ * is about to hear those lines again and they have to come back whole.
  */
 final class LyricDissolveEffect {
     /** Identity for call sites that only ever draw the single most recent line. */
@@ -30,6 +31,8 @@ final class LyricDissolveEffect {
     private static final int DUST_BUDGET = 192;
     /** Glyphs below this alpha are invisible, so the draw call can be skipped. */
     static final float VISIBLE_ALPHA = .006f;
+    /** A backward jump this large is the user seeking, not the player's position jitter. */
+    private static final long SEEK_BACK_MS = 1200L;
     /** How many characters may be mid-fade at once; keeps the wave readable on long lines. */
     private static final float OVERLAP_CHARS = 2.5f;
     private static final int CHAR_CAPACITY = 256;
@@ -59,6 +62,9 @@ final class LyricDissolveEffect {
     private int dustCursor;
     private long dustSerial;
     private long lineStartMs = Long.MIN_VALUE;
+    private long lastPositionMs = Long.MIN_VALUE;
+    /** True on the frame the play position jumped backwards far enough to be a real seek. */
+    private boolean seekedBack;
     private long dissolvingLineId = UNKNOWN_LINE;
     private long startedAtMs;
     private long frozenAtMs = -1L;
@@ -78,11 +84,25 @@ final class LyricDissolveEffect {
      * Tracks which line is current. A forward line change starts the dissolve of the line that
      * just ended; a backward seek, a change while paused, or the frame that leaves a freeze just
      * re-bases the timeline, so scrubbing through lyrics never starts or consumes anything.
+     *
+     * <p>{@code positionMs} is only used to tell a real seek back from the player's position
+     * jitter, which decides whether anything this run consumed may be re-armed.
      */
     void sync(long currentLineStartMs, String previousLine, boolean playing, boolean browsing,
-              long nowMs) {
+              long positionMs, long nowMs) {
         frameNowMs = nowMs;
         this.browsing = browsing;
+        // While the user scrolls the sheet the panel is fed the browse position instead of the
+        // play position, so that number must not be mistaken for a seek.
+        seekedBack = !browsing && tookSeekBack(positionMs);
+        if (seekedBack) {
+            // The lines this run already consumed are about to be played again: they have to come
+            // back whole instead of staying invisible for the rest of the song, and a dissolve
+            // still in flight belongs to a line the user is going back to.
+            clearDissolvedLines();
+            dissolvingLineId = UNKNOWN_LINE;
+            scheduleReady = false;
+        }
         boolean frozen = !playing || browsing;
         boolean resumed = false;
         if (frozen) {
@@ -167,8 +187,12 @@ final class LyricDissolveEffect {
         int sung = completedLyric == null ? 0
                 : Math.min(completedLyric.length(), CHAR_CAPACITY);
         if (sung <= sungUnits) {
-            // A seek back inside the line re-arms the units that are no longer sung.
-            if (sung < sungUnits) sungUnits = sung;
+            // A real seek back inside the line re-arms the units that are no longer sung, so the
+            // lyric appears again. The player's own position jitter must not: it used to drop
+            // sungUnits and repaint the whole line for a frame before eating it again, which is
+            // the flash seen on the panel, the secondary screen and the top strip at once
+            // (issue #27).
+            if (sung < sungUnits && seekedBack) sungUnits = sung;
             return;
         }
         int added = sung - sungUnits;
@@ -232,6 +256,22 @@ final class LyricDissolveEffect {
     /** Frozen clock, so a pause also holds the per-word erase where it was. */
     private long clockMs() {
         return frozenAtMs >= 0L ? frozenAtMs : frameNowMs;
+    }
+
+    /**
+     * True when the play position moved backwards by more than {@link #SEEK_BACK_MS}. A player
+     * that reports a coarse position and an extrapolated clock can wobble by a few hundred
+     * milliseconds; a real seek moves by seconds, and only that may re-arm anything.
+     */
+    private boolean tookSeekBack(long positionMs) {
+        boolean back = lastPositionMs != Long.MIN_VALUE && positionMs >= 0L
+                && positionMs < lastPositionMs - SEEK_BACK_MS;
+        if (positionMs >= 0L) lastPositionMs = positionMs;
+        return back;
+    }
+
+    private void clearDissolvedLines() {
+        Arrays.fill(dissolvedLines, UNKNOWN_LINE);
     }
 
     /** True while glyphs are still fading or dust is still in the air. */

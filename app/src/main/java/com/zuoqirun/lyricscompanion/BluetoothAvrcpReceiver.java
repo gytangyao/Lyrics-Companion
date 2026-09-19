@@ -63,6 +63,12 @@ public final class BluetoothAvrcpReceiver extends BroadcastReceiver {
             state = stateFromExtras(extras, state);
         }
         if (title.isEmpty()) return;
+        // 蓝牙通道被列进「忽略这些应用的媒体元数据」时不再写入状态（issue #35）：车机上蓝牙
+        // AVRCP 与 CarPlay/媒体会话互相抢占时，用户可以只留一条通道。
+        if (AppPreferences.ignoredPlayerPackage(context, "com.android.bluetooth")) {
+            DiagnosticLog.record(context, "AVRCP", "metadata ignored by user rule title=" + title);
+            return;
+        }
         DiagnosticLog.record(context, "AVRCP", "metadata received action=" + intent.getAction()
                 + " titlePresent=true artistPresent=" + !artist.isEmpty() + " state=" + state);
         MusicStateStore.update(context, "bluetooth", "蓝牙音频", "com.android.bluetooth",

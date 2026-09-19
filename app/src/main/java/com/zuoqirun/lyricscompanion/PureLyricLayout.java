@@ -7,10 +7,17 @@ final class PureLyricLayout {
 
     private PureLyricLayout() { }
 
-    static int windowStart(int total, int currentIndex, int requestedCount) {
-        int count = Math.max(1, Math.min(requestedCount, total));
-        int before = (count - 1) / 2;
-        return Math.max(0, Math.min(Math.max(0, total - count), currentIndex - before));
+    /**
+     * Index of the line that goes into the window's first slot.
+     *
+     * <p>The window keeps the requested number of slots whatever the song has around the current
+     * line, so the current line always lands on the same row. It used to shrink to the lines that
+     * exist, which pulled the first line of a song up to the top row of the panel and covered
+     * whatever the car draws there (issue #31). A negative index is an empty slot.
+     */
+    static int windowStart(int currentIndex, int requestedCount) {
+        int count = Math.max(1, requestedCount);
+        return currentIndex - (count - 1) / 2;
     }
 
     static float constrainedCurrentSize(float requestedSize, float availableHeight,

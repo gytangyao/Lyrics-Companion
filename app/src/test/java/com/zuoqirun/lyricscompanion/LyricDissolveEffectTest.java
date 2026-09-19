@@ -18,9 +18,9 @@ public class LyricDissolveEffectTest {
     /** Primes a line, then ends it, leaving the effect mid-dissolve at {@code nowMs}. */
     private static LyricDissolveEffect effectAt(long nowMs) {
         LyricDissolveEffect effect = new LyricDissolveEffect();
-        effect.sync(ENDED_LINE_ID, "", true, false, 0L);
-        effect.sync(CURRENT_LINE_ID, LINE, true, false, START_MS);
-        effect.sync(CURRENT_LINE_ID, LINE, true, false, nowMs);
+        effect.sync(ENDED_LINE_ID, "", true, false, 0L, 0L);
+        effect.sync(CURRENT_LINE_ID, LINE, true, false, START_MS, START_MS);
+        effect.sync(CURRENT_LINE_ID, LINE, true, false, nowMs, nowMs);
         return effect;
     }
 
@@ -60,7 +60,7 @@ public class LyricDissolveEffectTest {
             assertEquals(0f, effect.characterAlpha(ENDED_LINE_ID, index, chars), .02f);
         }
         effect.sync(CURRENT_LINE_ID, LINE, true, false,
-                START_MS + LyricDissolveEffect.DURATION_MS + 10_000L);
+                START_MS + LyricDissolveEffect.DURATION_MS + 10_000L, START_MS + LyricDissolveEffect.DURATION_MS + 10_000L);
         for (int index = 0; index < chars; index++) {
             assertEquals("a consumed line must not come back",
                     0f, effect.characterAlpha(ENDED_LINE_ID, index, chars), .02f);
@@ -91,9 +91,9 @@ public class LyricDissolveEffectTest {
 
     @Test public void aConsumedLineNeverPopsBackWhenItMovesToAnOlderSlot() {
         LyricDissolveEffect effect = new LyricDissolveEffect();
-        effect.sync(ENDED_LINE_ID, "", true, false, 0L);
-        effect.sync(CURRENT_LINE_ID, LINE, true, false, START_MS);
-        effect.sync(3_000L, LINE, true, false, START_MS + 2_000L);
+        effect.sync(ENDED_LINE_ID, "", true, false, 0L, 0L);
+        effect.sync(CURRENT_LINE_ID, LINE, true, false, START_MS, START_MS);
+        effect.sync(3_000L, LINE, true, false, START_MS + 2_000L, START_MS + 2_000L);
         assertEquals("the line that just ended owns the dissolve", CURRENT_LINE_ID,
                 effect.dissolvingLineId());
         assertTrue(effect.affects(ENDED_LINE_ID));
@@ -150,14 +150,14 @@ public class LyricDissolveEffectTest {
 
     @Test public void pausingAndScrubbingNeverStartADissolve() {
         LyricDissolveEffect effect = new LyricDissolveEffect();
-        effect.sync(ENDED_LINE_ID, "", true, false, 0L);
-        effect.sync(CURRENT_LINE_ID, LINE, false, false, 100L);
+        effect.sync(ENDED_LINE_ID, "", true, false, 0L, 0L);
+        effect.sync(CURRENT_LINE_ID, LINE, false, false, 100L, 100L);
         assertEquals("a line change while paused must not dissolve",
                 LyricDissolveEffect.UNKNOWN_LINE, effect.dissolvingLineId());
-        effect.sync(ENDED_LINE_ID, LINE, true, false, 200L);
+        effect.sync(ENDED_LINE_ID, LINE, true, false, 200L, 200L);
         assertEquals("a backward seek must not dissolve",
                 LyricDissolveEffect.UNKNOWN_LINE, effect.dissolvingLineId());
-        effect.sync(CURRENT_LINE_ID, "", true, false, 300L);
+        effect.sync(CURRENT_LINE_ID, "", true, false, 300L, 300L);
         assertEquals("an empty previous line has nothing to dissolve",
                 LyricDissolveEffect.UNKNOWN_LINE, effect.dissolvingLineId());
         // With nothing in flight the panel must take its untouched draw path.
@@ -175,31 +175,31 @@ public class LyricDissolveEffectTest {
         float before = effect.characterAlpha(ENDED_LINE_ID, glyph, chars);
         assertTrue("this glyph should be mid-fade, was " + before, before > 0f && before < 1f);
         // Pausing stops the clock: glyphs hold their alpha rather than jumping or clearing.
-        effect.sync(CURRENT_LINE_ID, LINE, false, false, pausedAt);
+        effect.sync(CURRENT_LINE_ID, LINE, false, false, pausedAt, pausedAt);
         assertEquals(before, effect.characterAlpha(ENDED_LINE_ID, glyph, chars), .0001f);
-        effect.sync(CURRENT_LINE_ID, LINE, false, false, pausedAt + 5_000L);
+        effect.sync(CURRENT_LINE_ID, LINE, false, false, pausedAt + 5_000L, pausedAt + 5_000L);
         assertEquals("a pause must not let the line finish dissolving",
                 before, effect.characterAlpha(ENDED_LINE_ID, glyph, chars), .0001f);
         // Resuming continues from where it stopped instead of jumping ahead.
-        effect.sync(CURRENT_LINE_ID, LINE, true, false, pausedAt + 5_000L);
+        effect.sync(CURRENT_LINE_ID, LINE, true, false, pausedAt + 5_000L, pausedAt + 5_000L);
         assertEquals(before, effect.characterAlpha(ENDED_LINE_ID, glyph, chars), .0001f);
-        effect.sync(CURRENT_LINE_ID, LINE, true, false, pausedAt + 5_100L);
+        effect.sync(CURRENT_LINE_ID, LINE, true, false, pausedAt + 5_100L, pausedAt + 5_100L);
         assertTrue(effect.characterAlpha(ENDED_LINE_ID, glyph, chars) < before);
     }
 
     @Test public void browsingNeverHidesALineTheUserScrolledTo() {
         // Play far enough that both earlier lines were consumed by dissolves.
         LyricDissolveEffect effect = new LyricDissolveEffect();
-        effect.sync(ENDED_LINE_ID, "", true, false, 0L);
-        effect.sync(CURRENT_LINE_ID, LINE, true, false, START_MS);
-        effect.sync(3_000L, LINE, true, false, START_MS + 1_000L);
-        effect.sync(3_000L, LINE, true, false, START_MS + 20_000L);
+        effect.sync(ENDED_LINE_ID, "", true, false, 0L, 0L);
+        effect.sync(CURRENT_LINE_ID, LINE, true, false, START_MS, START_MS);
+        effect.sync(3_000L, LINE, true, false, START_MS + 1_000L, START_MS + 1_000L);
+        effect.sync(3_000L, LINE, true, false, START_MS + 20_000L, START_MS + 20_000L);
         assertEquals("both lines are consumed while playing",
                 0f, effect.characterAlpha(ENDED_LINE_ID, 0, 7), .0001f);
         assertEquals(0f, effect.characterAlpha(CURRENT_LINE_ID, 0, 7), .0001f);
 
         // Now the user scrolls back through the lyrics.
-        effect.sync(ENDED_LINE_ID, LINE, true, true, START_MS + 21_000L);
+        effect.sync(ENDED_LINE_ID, LINE, true, true, START_MS + 21_000L, START_MS + 21_000L);
         assertTrue(effect.isBrowsing());
         assertFalse(effect.affects(ENDED_LINE_ID));
         assertEquals("a consumed line must be fully drawn while browsing",
@@ -210,17 +210,17 @@ public class LyricDissolveEffectTest {
 
     @Test public void leavingABrowseDoesNotConsumeWhateverWasScrolledTo() {
         LyricDissolveEffect effect = new LyricDissolveEffect();
-        effect.sync(ENDED_LINE_ID, "", true, false, 0L);
-        effect.sync(CURRENT_LINE_ID, LINE, true, true, 100L);
-        effect.sync(5_000L, LINE, true, true, 200L);
+        effect.sync(ENDED_LINE_ID, "", true, false, 0L, 0L);
+        effect.sync(CURRENT_LINE_ID, LINE, true, true, 100L, 100L);
+        effect.sync(5_000L, LINE, true, true, 200L, 200L);
         assertEquals("scrolling must not start a dissolve",
                 LyricDissolveEffect.UNKNOWN_LINE, effect.dissolvingLineId());
         // Leaving the browse on a different line is not a line ending either.
-        effect.sync(CURRENT_LINE_ID, LINE, true, false, 300L);
+        effect.sync(CURRENT_LINE_ID, LINE, true, false, 300L, 300L);
         assertEquals(LyricDissolveEffect.UNKNOWN_LINE, effect.dissolvingLineId());
         assertEquals(1f, effect.characterAlpha(5_000L, 0, 7), .0001f);
         // A real forward change after that dissolves normally.
-        effect.sync(6_000L, LINE, true, false, 400L);
+        effect.sync(6_000L, LINE, true, false, 400L, 400L);
         assertEquals(CURRENT_LINE_ID, effect.dissolvingLineId());
         assertTrue(effect.affects(CURRENT_LINE_ID));
     }
@@ -269,10 +269,13 @@ public class LyricDissolveEffectTest {
 
     @Test public void seekingBackInsideTheLineReArmsTheErase() {
         LyricDissolveEffect effect = new LyricDissolveEffect();
+        effect.sync(LINE_A, "", true, false, 30_000L, 900L);
         effect.syncWordErase(LINE_A, "上海人", 1, true, true, 1_000L);
         effect.syncWordErase(LINE_A, "上海人", 1, true, true, 2_000L);
         assertEquals(0f, effect.currentLineAlpha(LINE_A, 2), .0001f);
-        // Seek back: the third unit is no longer sung, so it has to be visible again.
+        // Seek back: the play position jumped 15 seconds back, so the third unit is no longer
+        // sung and has to be visible again.
+        effect.sync(LINE_A, "上海人", true, false, 15_000L, 3_000L);
         effect.syncWordErase(LINE_A, "上", 1, true, true, 3_000L);
         assertEquals(1, effect.sungUnits(LINE_A));
         assertEquals(1f, effect.currentLineAlpha(LINE_A, 2), .0001f);
@@ -283,14 +286,47 @@ public class LyricDissolveEffectTest {
         assertTrue(effect.currentLineAlpha(LINE_A, 1) < 1f);
     }
 
+    /**
+     * The player reports a coarse position and the store extrapolates between reports, so the
+     * position wobbles backwards by a few hundred milliseconds. That used to drop sungUnits and
+     * paint the whole line back for a frame — the flash the panel, the secondary screen and the
+     * top strip showed at the same time (issue #27).
+     */
+    @Test public void positionJitterDoesNotReArmTheErase() {
+        LyricDissolveEffect effect = new LyricDissolveEffect();
+        effect.sync(LINE_A, "", true, false, 10_000L, 900L);
+        effect.syncWordErase(LINE_A, "上海人", 3, true, true, 1_000L);
+        effect.syncWordErase(LINE_A, "上海人", 3, true, true, 1_500L);
+        assertEquals(0f, effect.currentLineAlpha(LINE_A, 0), .0001f);
+        effect.sync(LINE_A, "上海人", true, false, 9_800L, 1_600L);
+        effect.syncWordErase(LINE_A, "上海", 3, true, true, 1_600L);
+        assertEquals("jitter must not give the erased words back", 3, effect.sungUnits(LINE_A));
+        assertEquals(0f, effect.currentLineAlpha(LINE_A, 0), .0001f);
+        assertEquals(0f, effect.currentLineAlpha(LINE_A, 2), .0001f);
+    }
+
+    @Test public void seekingBackBringsTheConsumedLinesBack() {
+        LyricDissolveEffect effect = new LyricDissolveEffect();
+        effect.sync(ENDED_LINE_ID, "", true, false, 1_000L, 0L);
+        effect.sync(CURRENT_LINE_ID, LINE, true, false, 40_000L, START_MS);
+        effect.sync(3_000L, LINE, true, false, 42_000L, START_MS + 2_000L);
+        assertEquals("an earlier line stays consumed while playing forward",
+                0f, effect.characterAlpha(ENDED_LINE_ID, 0, 7), .0001f);
+        // The user drags back 30 seconds: those lines are about to be sung again, so the memory
+        // of what this run already ate has to let go of them.
+        effect.sync(ENDED_LINE_ID, LINE, true, false, 10_000L, START_MS + 3_000L);
+        assertEquals("a seek back must show the consumed lines again",
+                1f, effect.characterAlpha(ENDED_LINE_ID, 0, 7), .0001f);
+    }
+
     @Test public void aNewLineStartsWhollyVisible() {
         LyricDissolveEffect effect = new LyricDissolveEffect();
-        effect.sync(ENDED_LINE_ID, "", true, false, 0L);
+        effect.sync(ENDED_LINE_ID, "", true, false, 0L, 0L);
         effect.syncWordErase(ENDED_LINE_ID, "上海", 2, true, true, 100L);
         effect.syncWordErase(ENDED_LINE_ID, "上海", 2, true, true, 900L);
         assertEquals(0f, effect.currentLineAlpha(ENDED_LINE_ID, 0), .0001f);
         // The next line erases on its own clock and inherits nothing from the line before it.
-        effect.sync(CURRENT_LINE_ID, LINE, true, false, 1_000L);
+        effect.sync(CURRENT_LINE_ID, LINE, true, false, 1_000L, 1_000L);
         effect.syncWordErase(CURRENT_LINE_ID, "", LINE.length(), true, true, 1_000L);
         assertEquals(0, effect.sungUnits(CURRENT_LINE_ID));
         assertEquals(1f, effect.currentLineAlpha(CURRENT_LINE_ID, 0), .0001f);
@@ -306,7 +342,7 @@ public class LyricDissolveEffectTest {
 
         // The user scrolls through the sheet. The playing line keeps its eaten words — restoring
         // them and eating them again is exactly the flash this used to show.
-        effect.sync(CURRENT_LINE_ID, LINE, true, true, 1_600L);
+        effect.sync(CURRENT_LINE_ID, LINE, true, true, 1_600L, 1_600L);
         assertTrue(effect.isErasingWords(LINE_A));
         assertEquals("the line being sung stays erased while scrolling",
                 0f, effect.currentLineAlpha(LINE_A, 0), .0001f);
@@ -335,24 +371,24 @@ public class LyricDissolveEffectTest {
 
     @Test public void pausingHoldsTheEraseWhereItWas() {
         LyricDissolveEffect effect = new LyricDissolveEffect();
-        effect.sync(ENDED_LINE_ID, "", true, false, 0L);
+        effect.sync(ENDED_LINE_ID, "", true, false, 0L, 0L);
         effect.syncWordErase(LINE_A, "上海", 8, true, true, 1_000L);
         effect.syncWordErase(LINE_A, "上海", 8, true, true, 1_100L);
         float mid = effect.currentLineAlpha(LINE_A, 0);
         assertTrue(mid > 0f && mid < 1f);
-        effect.sync(ENDED_LINE_ID, "", false, false, 1_100L);
+        effect.sync(ENDED_LINE_ID, "", false, false, 1_100L, 1_100L);
         assertEquals(mid, effect.currentLineAlpha(LINE_A, 0), .0001f);
-        effect.sync(ENDED_LINE_ID, "", false, false, 9_000L);
+        effect.sync(ENDED_LINE_ID, "", false, false, 9_000L, 9_000L);
         assertEquals(mid, effect.currentLineAlpha(LINE_A, 0), .0001f);
     }
 
     @Test public void aLineAlreadyEatenByTheWordEraseDoesNotComeBack() {
         LyricDissolveEffect effect = new LyricDissolveEffect();
-        effect.sync(ENDED_LINE_ID, "", true, false, 0L);
+        effect.sync(ENDED_LINE_ID, "", true, false, 0L, 0L);
         effect.syncWordErase(ENDED_LINE_ID, LINE, LINE.length(), true, true, 100L);
         effect.syncWordErase(ENDED_LINE_ID, LINE, LINE.length(), true, true, 5_000L);
         // The line ends. It has nothing left, so it must stay gone instead of dissolving again.
-        effect.sync(CURRENT_LINE_ID, LINE, true, false, 5_100L);
+        effect.sync(CURRENT_LINE_ID, LINE, true, false, 5_100L, 5_100L);
         assertEquals(LyricDissolveEffect.UNKNOWN_LINE, effect.dissolvingLineId());
         assertEquals("an eaten line must not be repainted by the end-of-line dissolve",
                 0f, effect.characterAlpha(ENDED_LINE_ID, 0, 7), .0001f);
