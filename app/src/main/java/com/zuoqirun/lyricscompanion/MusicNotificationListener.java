@@ -97,7 +97,6 @@ public final class MusicNotificationListener extends NotificationListenerService
         }
 
         @Override public void onNoSession() {
-            if (BluetoothAvrcpReceiver.ownsCurrentState()) return;
             if (dftcReader != null && dftcReader.hasUsableSession()) return;
             if (refreshNotificationSession()) return;
             long now = SystemClock.elapsedRealtime();
@@ -285,8 +284,7 @@ public final class MusicNotificationListener extends NotificationListenerService
     }
 
     private boolean refreshNotificationSession() {
-        if (!connected || BluetoothAvrcpReceiver.ownsCurrentState()
-                || dftcReader != null && dftcReader.hasUsableSession()) return false;
+        if (!connected || dftcReader != null && dftcReader.hasUsableSession()) return false;
         long now = SystemClock.elapsedRealtime();
         if (lastStandardSessionElapsedMs > 0L
                 && now - lastStandardSessionElapsedMs < EMPTY_SESSION_GRACE_MS) return false;

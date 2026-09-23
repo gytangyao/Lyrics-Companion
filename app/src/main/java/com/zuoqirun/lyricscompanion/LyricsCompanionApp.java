@@ -10,12 +10,8 @@ public final class LyricsCompanionApp extends Application {
         super.onCreate();
         // 按时间段的配色在启动时就要落地（issue #34），否则设置页会停在系统主题上。
         applyMaterialTheme(AppPreferences.resolvedThemeMode(this));
-        CrashReporter.install(this);
         DiagnosticLog.record(this, "Application", "process started");
         DynamicColors.applyToActivitiesIfAvailable(this);
-        if (AppPreferences.get(this).getBoolean(AppPreferences.KEY_DIAGNOSTIC_UPLOAD_ENABLED, false)) {
-            CommunityClient.uploadPendingCrashAsync(this, null);
-        }
     }
 
     /**

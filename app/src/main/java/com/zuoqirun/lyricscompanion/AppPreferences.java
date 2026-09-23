@@ -147,10 +147,8 @@ final class AppPreferences {
     static final String KEY_LAUNCH_OVERLAY_LAST_AT = "launch_overlay_last_at";
     static final String KEY_AUTO_START_OVERLAYS = "auto_start_overlays";
     static final String KEY_SERVICE_STOPPED_BY_USER = "service_stopped_by_user";
-    static final String KEY_MAIN_OVERLAY_TOUCH_THROUGH = "main_overlay_touch_through";
-    static final String KEY_SECONDARY_OVERLAY_TOUCH_THROUGH =
-            "secondary_overlay_touch_through";
     static final String KEY_OVERLAY_POSITION_LOCKED = "overlay_position_locked";
+    static final String KEY_OVERLAY_TOUCH_THROUGH = "overlay_touch_through";
     static final String KEY_HIDE_OVERLAYS_WHEN_NOT_PLAYING =
             "hide_overlays_when_not_playing";
     static final String KEY_HIDE_OVERLAYS_IN_PLAYER = "hide_overlays_in_player";
@@ -165,7 +163,6 @@ final class AppPreferences {
     static final String KEY_PLAYBACK_CONTROL_Y = "playback_control_y";
     static final String KEY_SECONDARY_PLAYBACK_CONTROLS = "secondary_playback_controls";
     static final String KEY_FULLSCREEN_CLOSE_MODE = "fullscreen_close_mode";
-    static final String KEY_OVERLAY_CLOSE_MODE = "overlay_close_mode";
     static final String KEY_NOTIFICATION_LYRICS = "notification_lyrics";
     static final String KEY_TOP_LYRIC_STRIP = "top_lyric_strip";
     /** Zero keeps the top lyric strip white so it stays legible over most wallpapers. */
@@ -181,7 +178,6 @@ final class AppPreferences {
     static final String KEY_TOP_LYRIC_OFFSET_Y_DP = "top_lyric_offset_y_dp";
     /** Settings-page scale; deliberately independent from lyric rendering scale. */
     static final String KEY_SETTINGS_UI_SCALE = "settings_ui_scale";
-    static final String KEY_MAIN_SETTINGS_MODE = "main_settings_mode";
     static final String KEY_TOP_LYRIC_SHOW_TRANSLATION = "top_lyric_show_translation";
     static final String KEY_TOP_LYRIC_BACKGROUND = "top_lyric_background";
     static final String KEY_TOP_LYRIC_SPECTRUM = "top_lyric_spectrum";
@@ -206,14 +202,10 @@ final class AppPreferences {
     static final String KEY_CUSTOM_FONT_FILE = "custom_font_file";
     static final String KEY_LYRIC_CACHE_POLICY = "lyric_cache_policy";
     static final String KEY_LYRIC_CACHE_LIMIT_MB = "lyric_cache_limit_mb";
-    static final String KEY_COMMUNITY_CLIENT_ID = "community_client_id";
     static final String KEY_FEEDBACK_TICKETS = "feedback_tickets";
     static final String KEY_LAST_FEEDBACK_ID = "last_feedback_id";
     static final String KEY_FEEDBACK_READ_REPLY_IDS = "feedback_read_reply_ids";
     static final String KEY_FAQ_CACHE = "faq_cache";
-    static final String KEY_DIAGNOSTIC_UPLOAD_ENABLED = "diagnostic_upload_enabled";
-    static final String KEY_COMMUNITY_ANNOUNCEMENT_DISMISSED =
-            "community_announcement_dismissed";
     static final String KEY_SAFETY_NOTICE_SEEN = "safety_notice_seen";
 
     private AppPreferences() {}
@@ -266,7 +258,7 @@ final class AppPreferences {
      * 这些"共用显示参数"按 <b>屏 × 样式</b> 两级保存（issue #39）：字号、颜色与描边、背景不透明度、
      * 歌词显示行数、粒子与逐字擦除、上一句 / 下一句的不透明度与字号、对齐与圆角、封面与匹配动画。
      *
-     * <p>样式选择本身、位置锁定 / 触摸穿透、歌词时间校正、缓存与隐藏规则这些"行为"设置仍然只按屏
+     * <p>样式选择本身、位置锁定、歌词时间校正、缓存与隐藏规则这些"行为"设置仍然只按屏
      * 共用：它们与样式无关，按样式各存一份只会让用户改了一处、别处不生效。
      */
     private static final Set<String> STYLE_SCOPED_KEYS = Collections.unmodifiableSet(
@@ -1225,7 +1217,7 @@ final class AppPreferences {
 
     static boolean refinedShowTranslation(Context context) { return refinedShowTranslation(context, false); }
     static boolean refinedShowTranslation(Context context, boolean secondary) {
-        return displayBoolean(context, secondary, KEY_REFINED_SHOW_TRANSLATION, true);
+        return displayBoolean(context, secondary, KEY_REFINED_SHOW_TRANSLATION, false);
     }
 
     static boolean refinedLyricGlow(Context context) { return refinedLyricGlow(context, false); }
@@ -1242,7 +1234,7 @@ final class AppPreferences {
     }
 
     static boolean compactShowNextLine(Context context, boolean secondary) {
-        return displayBoolean(context, secondary, KEY_COMPACT_SHOW_NEXT_LINE, true);
+        return displayBoolean(context, secondary, KEY_COMPACT_SHOW_NEXT_LINE, false);
     }
 
     static boolean compactUseRealSpectrum(Context context, boolean secondary) {
@@ -1297,12 +1289,6 @@ final class AppPreferences {
     static String fullscreenCloseMode(Context context) {
         String value = get(context).getString(KEY_FULLSCREEN_CLOSE_MODE, "fade");
         return "always".equals(value) || "hidden".equals(value) ? value : "fade";
-    }
-
-    static String overlayCloseMode(Context context) {
-        String value = get(context).getString(KEY_OVERLAY_CLOSE_MODE, "fade");
-        return "always".equals(value) || "hidden".equals(value)
-                || "auto_fade".equals(value) || "auto_hide".equals(value) ? value : "fade";
     }
 
     static boolean tapOverlayReturnsToPlayer(Context context) {
@@ -1364,12 +1350,10 @@ final class AppPreferences {
     /** Restores product settings while retaining the anonymous support identity and replies. */
     static int resetUserSettings(Context context) {
         Set<String> preserved = new HashSet<>();
-        preserved.add(KEY_COMMUNITY_CLIENT_ID);
         preserved.add(KEY_FEEDBACK_TICKETS);
         preserved.add(KEY_LAST_FEEDBACK_ID);
         preserved.add(KEY_FEEDBACK_READ_REPLY_IDS);
         preserved.add(KEY_FAQ_CACHE);
-        preserved.add(KEY_COMMUNITY_ANNOUNCEMENT_DISMISSED);
         preserved.add(KEY_SAFETY_NOTICE_SEEN);
         SharedPreferences preferences = get(context);
         SharedPreferences.Editor editor = preferences.edit();
@@ -1410,23 +1394,22 @@ final class AppPreferences {
         get(context).edit().putBoolean(KEY_SERVICE_STOPPED_BY_USER, stopped).apply();
     }
 
-    static boolean overlayTouchThrough(Context context, boolean secondary) {
-        return displaySlotStore(context, secondary).getBoolean(secondary
-                ? KEY_SECONDARY_OVERLAY_TOUCH_THROUGH : KEY_MAIN_OVERLAY_TOUCH_THROUGH, false);
-    }
-
-    static void putOverlayTouchThrough(Context context, boolean secondary, boolean enabled) {
-        displaySlotStore(context, secondary).edit().putBoolean(secondary
-                ? KEY_SECONDARY_OVERLAY_TOUCH_THROUGH : KEY_MAIN_OVERLAY_TOUCH_THROUGH, enabled)
-                .apply();
+    /** Keeps the panel where it is; the drag gesture refuses to move a locked overlay. */
+    static boolean overlayPositionLocked(Context context, boolean secondary) {
+        return displayBoolean(context, secondary, KEY_OVERLAY_POSITION_LOCKED, false);
     }
 
     /**
-     * Locks the window and lets every non-control touch fall through to what is underneath; the
-     * playback buttons keep a touchable surface of their own while they are shown.
+     * Takes every touch away from the overlay so the app underneath receives them. The setting
+     * page switch is the only way back out, because a pass-through panel can no longer receive the
+     * long-press that would clear it.
      */
-    static boolean overlayPositionLocked(Context context, boolean secondary) {
-        return displayBoolean(context, secondary, KEY_OVERLAY_POSITION_LOCKED, false);
+    static boolean overlayTouchThrough(Context context, boolean secondary) {
+        return displayBoolean(context, secondary, KEY_OVERLAY_TOUCH_THROUGH, false);
+    }
+
+    static void putOverlayTouchThrough(Context context, boolean secondary, boolean enabled) {
+        putDisplayBoolean(context, secondary, KEY_OVERLAY_TOUCH_THROUGH, enabled);
     }
 
     /**
@@ -1600,15 +1583,6 @@ final class AppPreferences {
     static void setSettingsUiScale(Context context, int percent) {
         int safe = percent == 150 || percent == 200 ? percent : 100;
         get(context).edit().putInt(KEY_SETTINGS_UI_SCALE, safe).apply();
-    }
-
-    static boolean conciseSettingsMode(Context context) {
-        return "concise".equals(get(context).getString(KEY_MAIN_SETTINGS_MODE, "concise"));
-    }
-
-    static void setConciseSettingsMode(Context context, boolean concise) {
-        get(context).edit().putString(KEY_MAIN_SETTINGS_MODE,
-                concise ? "concise" : "complete").apply();
     }
 
     static int topLyricOffsetYDp(Context context) {

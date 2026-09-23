@@ -5,10 +5,8 @@ import java.util.Locale;
 /**
  * Picks which playback channel owns {@link MusicStateStore} when more than one publishes at once.
  *
- * <p>A head unit that receives audio over Bluetooth AVRCP while a phone projection session
- * (CarPlay and friends) also publishes a MediaSession gets two independent writers for the same
- * state. Every write from the other channel changes the track key, which drops the lyric
- * timeline and redraws the panel — the reported "歌词一闪一闪". This class decides, per incoming
+ * <p>Two independent publishers for the same state can cause the lyric timeline to drop and the
+ * panel to redraw on every write — the reported "歌词一闪一闪". This class decides, per incoming
  * signal, whether it may replace the active one.</p>
  *
  * <p>In order: a publisher that cannot identify a track never takes the slot; a challenger that
@@ -22,9 +20,6 @@ import java.util.Locale;
  * passed in by the caller instead of being read from {@code SystemClock}.</p>
  */
 final class SessionChannelArbiter {
-    /** The car receives audio over Bluetooth and reads metadata from AVRCP broadcasts. */
-    static final int CHANNEL_BLUETOOTH = 0;
-    /** A regular MediaSession (or notification fallback) publisher, including CarPlay. */
     static final int CHANNEL_MEDIA_SESSION = 1;
 
     /**
@@ -49,13 +44,6 @@ final class SessionChannelArbiter {
     private static final int SCORE_PROGRESS = 4;
     private static final int SCORE_DURATION = 2;
     private static final int SCORE_POSITION_TIMESTAMP = 1;
-    /**
-     * AVRCP is a degraded view of the very same playback (title, state, coarse position), so a
-     * media session that can do everything AVRCP can wins: the bias plus the progress and
-     * duration points keep a playing MediaSession in charge. Two fields (progress, timestamp)
-     * would not be enough to out-score the bias.
-     */
-    private static final int BLUETOOTH_BASE = 0;
     private static final int MEDIA_SESSION_BASE = 8;
 
     private Signal active;
@@ -97,16 +85,14 @@ final class SessionChannelArbiter {
          * AVRCP channel, so narrowing on it cannot reclassify a MediaSession publisher.
          */
         static Signal of(String sourceId, String packageName, MusicPlaybackData data) {
-            boolean bluetooth = "bluetooth".equals(safe(sourceId))
-                    || "com.android.bluetooth".equals(safe(packageName));
-            return new Signal(bluetooth ? CHANNEL_BLUETOOTH : CHANNEL_MEDIA_SESSION,
+            return new Signal(CHANNEL_MEDIA_SESSION,
                     sourceId, packageName, hasTitle(data), isPlayingState(data),
                     hasProgress(data), data != null && data.durationMs > 0L,
                     data == null ? 0L : data.positionUpdatedAtElapsedMs);
         }
 
         int score() {
-            int score = channel == CHANNEL_BLUETOOTH ? BLUETOOTH_BASE : MEDIA_SESSION_BASE;
+            int score = MEDIA_SESSION_BASE;
             if (hasTitle) score += SCORE_TITLE;
             if (playing) score += SCORE_PLAYING;
             if (hasProgress) score += SCORE_PROGRESS;
@@ -157,7 +143,6 @@ final class SessionChannelArbiter {
         }
 
         String describe() {
-            if (channel == CHANNEL_BLUETOOTH) return "蓝牙音频(com.android.bluetooth)";
             String packageValue = packageName.isEmpty()
                     ? (sourceId.isEmpty() ? "unknown" : sourceId) : packageName;
             return sourceId.isEmpty() ? packageValue : sourceId + "(" + packageValue + ")";

@@ -70,41 +70,24 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     private WindowManager mainWindowManager;
     private WindowManager.LayoutParams mainParams;
     private LyricsPanelView mainPanel;
-    private TextView mainUnlockHandle;
-    private WindowManager.LayoutParams mainUnlockParams;
-    private View mainPlaybackPad;
-    private WindowManager.LayoutParams mainPlaybackPadParams;
     private Context secondaryContext;
     private Display secondaryDisplay;
     private WindowManager secondaryWindowManager;
     private WindowManager.LayoutParams secondaryParams;
     private LyricsPanelView secondaryPanel;
-    private TextView secondaryUnlockHandle;
-    private WindowManager.LayoutParams secondaryUnlockParams;
-    private View secondaryPlaybackPad;
-    private WindowManager.LayoutParams secondaryPlaybackPadParams;
     private LyricsPanelView statusLyricStrip;
     private WindowManager.LayoutParams statusLyricParams;
     /** One overlay per additional screen (slots 2+), so several can be shown at once. */
     private final List<ExtraOverlay> extraOverlays = new ArrayList<>();
-    private WindowManager bottomSpectrumManager;
-    private BottomSpectrumView bottomSpectrumView;
     private boolean settingsVisible;
     private boolean overlaysHiddenForPlayback;
     private boolean secondaryHiddenForPlayback;
     private boolean screenReceiverRegistered;
     private String lastNotificationSignature = "";
-    private final Handler communityHandler = new Handler(Looper.getMainLooper());
     private final Handler notificationHandler = new Handler(Looper.getMainLooper());
     private final Handler recoveryHandler = new Handler(Looper.getMainLooper());
     private int secondaryRetryAttempts;
     private int statusLyricRetryAttempts;
-    private final Runnable communityHeartbeat = new Runnable() {
-        @Override public void run() {
-            CommunityClient.heartbeatAsync(getApplicationContext(), null);
-            communityHandler.postDelayed(this, 60_000L);
-        }
-    };
     private final Runnable notificationRefresh = new Runnable() {
         @Override public void run() {
             refreshPlaybackNotification();
@@ -234,8 +217,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     static void stopAndRememberOverlays(Context context) {
         AppPreferences.get(context).edit()
                 .putBoolean(AppPreferences.KEY_NOTIFICATION_LYRICS, false)
-                .putBoolean(AppPreferences.KEY_MAIN_OVERLAY_TOUCH_THROUGH, false)
-                .putBoolean(AppPreferences.KEY_SECONDARY_OVERLAY_TOUCH_THROUGH, false)
                 .putBoolean(AppPreferences.KEY_SERVICE_STOPPED_BY_USER, true)
                 .remove(AppPreferences.KEY_LAUNCH_OVERLAY_LAST_AT)
                 .apply();
@@ -272,7 +253,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         DiagnosticLog.record(this, "Overlay", "display service created api="
                 + Build.VERSION.SDK_INT);
         MusicStateStore.initialize(this);
-        AudioSpectrumSource.sync(this);
         createNotificationChannel();
         startForeground(NOTIFICATION_ID, createNotification());
         syncScreenReceiver();
@@ -280,7 +260,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         recoveryHandler.postDelayed(listenerHealthProbe, 1_500L);
         displayManager = (DisplayManager) getSystemService(DISPLAY_SERVICE);
         if (displayManager != null) displayManager.registerDisplayListener(this, null);
-        communityHandler.post(communityHeartbeat);
         rebuildAll();
     }
 
@@ -304,7 +283,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         }
         if (ACTION_SETTINGS_VISIBILITY.equals(action)) {
             settingsVisible = intent.getBooleanExtra(EXTRA_VISIBLE, false);
-            AudioSpectrumSource.sync(this);
             if (settingsVisible) dismissMain();
             else rebuildAll();
             return START_STICKY;
@@ -320,7 +298,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                 + (mainPanel != null && mainPanel.getParent() != null)
                 + " secondaryAttached="
                 + (secondaryPanel != null && secondaryPanel.getParent() != null));
-        communityHandler.removeCallbacks(communityHeartbeat);
         notificationHandler.removeCallbacks(notificationRefresh);
         recoveryHandler.removeCallbacks(listenerHealthProbe);
         recoveryHandler.removeCallbacks(statusLyricRetry);
@@ -331,8 +308,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         dismissSecondary();
         dismissExtras();
         dismissStatusLyricStrip();
-        dismissBottomSpectrum();
-        AudioSpectrumSource.release();
         super.onDestroy();
     }
 
@@ -356,7 +331,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     }
 
     private void rebuildAll() {
-        AudioSpectrumSource.sync(this);
         overlaysHiddenForPlayback = shouldHideOverlays(false);
         secondaryHiddenForPlayback = shouldHideOverlays(true);
         DiagnosticLog.record(this, "Overlay", "rebuild main=" + AppPreferences.mainEnabled(this)
@@ -378,7 +352,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
             dismissSecondary();
             dismissExtras();
             dismissStatusLyricStrip();
-            dismissBottomSpectrum();
             return;
         }
         if (!canDrawOverlays()) {
@@ -386,13 +359,11 @@ public final class LyricsDisplayService extends Service implements DisplayManage
             dismissSecondary();
             dismissExtras();
             dismissStatusLyricStrip();
-            dismissBottomSpectrum();
             return;
         }
         dismissMain();
         dismissSecondary();
         dismissExtras();
-        dismissBottomSpectrum();
         if (overlaysHiddenForPlayback) dismissStatusLyricStrip();
         else if (AppPreferences.mainEnabled(this) && !settingsVisible) showMain();
         if (AppPreferences.secondaryEnabled(this) && !secondaryHiddenForPlayback) showSecondary();
@@ -400,7 +371,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         if (!secondaryHiddenForPlayback) rebuildExtras();
         if (!overlaysHiddenForPlayback && AppPreferences.topLyricStrip(this)) showStatusLyricStrip();
         else dismissStatusLyricStrip();
-        if (!overlaysHiddenForPlayback && AppPreferences.bottomSpectrum(this)) showBottomSpectrum();
     }
 
     private void rebuildSecondary() {
@@ -572,10 +542,9 @@ public final class LyricsDisplayService extends Service implements DisplayManage
             boolean longPressReady;
             boolean lyricGesture;
             boolean doubleTap;
-            MediaControlAction playbackControl;
             View pressedView;
             long lastTapUpAt;
-            final Runnable lockForTouchThrough = new Runnable() {
+            final Runnable longPressSignal = new Runnable() {
                 @Override public void run() {
                     if (pressedView == null || moved) return;
                     longPressReady = true;
@@ -584,7 +553,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
             };
             final Runnable singleTap = new Runnable() {
                 @Override public void run() {
-                    if (playbackControl != null || !openOnTap) return;
+                    if (!openOnTap) return;
                     if (!AppPreferences.tapOverlayReturnsToPlayer(
                             LyricsDisplayService.this)
                             || !MusicNotificationListener.openActivePlayer(
@@ -604,12 +573,9 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                     downY = params.y;
                     moved = false;
                     longPressReady = false;
-                    playbackControl = v instanceof LyricsPanelView
-                            ? ((LyricsPanelView) v).playbackControlAt(event.getX(), event.getY())
-                            : null;
-                    lyricGesture = playbackControl == null && v instanceof LyricsPanelView
+                    lyricGesture = v instanceof LyricsPanelView
                             && ((LyricsPanelView) v).isLyricGestureRegion(event.getX(), event.getY());
-                    doubleTap = !lyricGesture && playbackControl == null
+                    doubleTap = !lyricGesture
                             && lastTapUpAt > 0L
                             && event.getEventTime() - lastTapUpAt
                             <= ViewConfiguration.getDoubleTapTimeout();
@@ -617,8 +583,8 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                         tapHandler.removeCallbacks(singleTap);
                         lastTapUpAt = 0L;
                     }
-                    longPressHandler.removeCallbacks(lockForTouchThrough);
-                    longPressHandler.postDelayed(lockForTouchThrough,
+                    longPressHandler.removeCallbacks(longPressSignal);
+                    longPressHandler.postDelayed(longPressSignal,
                             ViewConfiguration.getLongPressTimeout());
                 } else if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
                     float dx = event.getRawX() - downRawX;
@@ -626,18 +592,18 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                     if (dx * dx + dy * dy > touchSlop * touchSlop) {
                         moved = true;
                         longPressReady = false;
-                        longPressHandler.removeCallbacks(lockForTouchThrough);
+                        longPressHandler.removeCallbacks(longPressSignal);
                     }
                 } else if (event.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN
                         || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
                     moved = true;
                     longPressReady = false;
-                    longPressHandler.removeCallbacks(lockForTouchThrough);
+                    longPressHandler.removeCallbacks(longPressSignal);
                     tapHandler.removeCallbacks(singleTap);
                     lastTapUpAt = 0L;
                     pressedView = null;
                 } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
-                    longPressHandler.removeCallbacks(lockForTouchThrough);
+                    longPressHandler.removeCallbacks(longPressSignal);
                     confirmLongPress = longPressReady && !moved;
                     longPressReady = false;
                     pressedView = null;
@@ -680,10 +646,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                                 .putInt(xKey, params.x).putInt(yKey, params.y).apply();
                         if (!moved) {
                             v.performClick();
-                            if (playbackControl != null) {
-                                MusicNotificationListener.requestPlaybackControl(
-                                        LyricsDisplayService.this, playbackControl);
-                            } else if (doubleTap) {
+                            if (doubleTap) {
                                 forceReturnOverlay(!secondary);
                             } else if (!lyricGesture) {
                                 lastTapUpAt = event.getEventTime();
@@ -694,11 +657,9 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                                 }
                             }
                         }
-                        playbackControl = null;
                         doubleTap = false;
                         return true;
                     case MotionEvent.ACTION_CANCEL:
-                        playbackControl = null;
                         doubleTap = false;
                         return true;
                     default:
@@ -730,25 +691,12 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             popup.setElevation(dp(this, 10));
         }
-        addQuickMenuButton(content, "尺寸与透明度", () -> openDisplaySettings(secondary, popup));
-        addQuickMenuButton(content, "字体", () -> {
-            popup.dismiss();
-            openMainActivity();
-        });
-        addQuickMenuButton(content, "频谱颜色", () -> {
-            popup.dismiss();
-            Intent intent = new Intent(this, ColorSettingsActivity.class)
-                    .putExtra(ColorSettingsActivity.EXTRA_SCOPE, secondary ? 1 : 0)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(intent);
-        });
         boolean locked = AppPreferences.overlayPositionLocked(this, secondary);
-        addQuickMenuButton(content, locked ? "解除位置锁定" : "锁定位置（保留控制按键，其余穿透）", () -> {
+        addQuickMenuButton(content, locked ? "解除位置锁定" : "锁定位置", () -> {
             AppPreferences.putDisplayBoolean(this, secondary,
                     AppPreferences.KEY_OVERLAY_POSITION_LOCKED, !locked);
             popup.dismiss();
             applyOverlayInteraction(secondary);
-            if (!locked) notifyPassThroughDimming();
         });
         addQuickMenuButton(content, "锁定并触摸穿透", () -> {
             popup.dismiss();
@@ -760,7 +708,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     /**
      * Positions the long-press menu entirely inside the anchor's display. showAsDropDown clips
      * against the anchor window's frame, which for an overlay panel is the panel itself — when
-     * the overlay hugs a screen edge the last rows ("锁定并触摸穿透") became untappable. The
+     * the overlay hugs a screen edge the last rows ("锁定位置") became untappable. The
      * window height is capped on small displays so the inner ScrollView scrolls instead of the
      * menu being clipped.
      */
@@ -799,33 +747,13 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         content.addView(button, new LinearLayout.LayoutParams(-1, dp(this, 42)));
     }
 
-    private void openDisplaySettings(boolean secondary, PopupWindow popup) {
-        popup.dismiss();
-        Intent intent = new Intent(this, DisplaySettingsActivity.class)
-                .putExtra(DisplaySettingsActivity.EXTRA_SECONDARY, secondary)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        startActivity(intent);
-    }
-
-    private void setOverlayTouchThrough(boolean secondary, boolean enabled) {
-        if (enabled) {
-            // "锁定并触摸穿透" promises a fully transparent overlay: it replaces the locked mode
-            // rather than stacking on top of it, otherwise the playback pad would survive it.
-            AppPreferences.putDisplayBoolean(this, secondary,
-                    AppPreferences.KEY_OVERLAY_POSITION_LOCKED, false);
-        }
-        AppPreferences.putOverlayTouchThrough(this, secondary, enabled);
-        applyOverlayInteraction(secondary);
-        if (enabled) notifyPassThroughDimming();
-    }
-
     /**
-     * Applies whichever interaction mode the preferences ask for, for one overlay window.
+     * Applies the interaction mode the preferences ask for, for one overlay window.
      *
-     * <p>A locked position cannot follow a drag, so the window stops taking touches altogether and
-     * everything that is not a control falls through to whatever is underneath. The pieces that
-     * stay useful get a touchable surface of their own: the playback buttons (when they are shown)
-     * and the × handle that gets the user back out.
+     * <p>Position lock is enforced by the drag gesture itself, which simply refuses to move a
+     * locked panel, so the window stays touchable and the long-press menu remains reachable.
+     * Touch-through is the mode that takes the touches away: every tap lands on whatever is
+     * underneath, and only the settings page switch turns it back off.
      */
     private void applyOverlayInteraction(boolean secondary) {
         WindowManager manager = secondary ? secondaryWindowManager : mainWindowManager;
@@ -833,189 +761,35 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         WindowManager.LayoutParams params = secondary ? secondaryParams : mainParams;
         if (manager == null || panel == null || params == null || panel.getParent() == null) return;
         boolean touchThrough = AppPreferences.overlayTouchThrough(this, secondary);
-        boolean locked = AppPreferences.overlayPositionLocked(this, secondary);
-        boolean passThrough = touchThrough || locked;
         int touchFlag = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-        params.flags = passThrough ? params.flags | touchFlag : params.flags & ~touchFlag;
+        params.flags = touchThrough ? params.flags | touchFlag : params.flags & ~touchFlag;
         // Android 12 blocks touches through opaque, non-touchable overlays as untrusted input.
-        params.alpha = passThrough ? touchThroughWindowAlpha() : 1f;
+        params.alpha = touchThrough ? touchThroughWindowAlpha() : 1f;
         try {
             manager.updateViewLayout(panel, params);
         } catch (Throwable error) {
             Log.w(TAG, "Unable to change overlay interaction", error);
             return;
         }
-        boolean keepControls = locked && !touchThrough;
-        if (passThrough) {
-            if (!addUnlockHandle(secondary)) {
-                // Without a way out the window must stay touchable, whatever the preference says.
-                params.flags &= ~touchFlag;
-                params.alpha = 1f;
-                try { manager.updateViewLayout(panel, params); } catch (Throwable ignored) { }
-                removePlaybackPad(secondary);
-                return;
-            }
-        } else {
-            removeUnlockHandle(secondary);
-        }
-        if (keepControls && AppPreferences.showPlaybackControls(this, secondary)) {
-            addPlaybackPad(secondary);
-        } else {
-            removePlaybackPad(secondary);
-        }
-        DiagnosticLog.record(this, "Overlay", (passThrough
-                ? (touchThrough ? "touch through" : "position locked, controls kept")
-                : "touch through disabled") + " " + (secondary ? "secondary" : "main")
-                + " alpha=" + params.alpha);
+        DiagnosticLog.record(this, "Overlay", (touchThrough ? "touch through" : "touchable")
+                + " " + (secondary ? "secondary" : "main") + " alpha=" + params.alpha);
     }
 
-    /**
-     * A transparent window over exactly the playback buttons. While the overlay itself is
-     * untouchable this is what keeps 上一首 / 播放暂停 / 下一首 usable, and taps anywhere else keep
-     * falling through to the content below.
-     */
-    private void addPlaybackPad(boolean secondary) {
-        WindowManager manager = secondary ? secondaryWindowManager : mainWindowManager;
-        WindowManager.LayoutParams panelParams = secondary ? secondaryParams : mainParams;
-        LyricsPanelView panel = secondary ? secondaryPanel : mainPanel;
-        if (manager == null || panelParams == null || panel == null || panel.getParent() == null) {
-            return;
-        }
-        android.graphics.Rect bounds = panel.playbackControlsBounds();
-        if (bounds == null || bounds.width() <= 0 || bounds.height() <= 0) {
-            removePlaybackPad(secondary);
-            return;
-        }
-        if (isPlaybackPadCurrent(secondary, bounds)) return;
-        removePlaybackPad(secondary);
-        Context context = secondary ? secondaryContext : this;
-        View pad = new View(context);
-        pad.setBackgroundColor(Color.TRANSPARENT);
-        pad.setContentDescription("播放控制");
-        WindowManager.LayoutParams padParams = new WindowManager.LayoutParams(
-                bounds.width(), bounds.height(),
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                        : WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                PixelFormat.TRANSLUCENT);
-        padParams.gravity = Gravity.TOP | Gravity.START;
-        Point screen = displaySize(secondary ? secondaryDisplay
-                : mainWindowManager.getDefaultDisplay());
-        padParams.x = clamp(panelParams.x + bounds.left, 0,
-                Math.max(0, screen.x - bounds.width()));
-        padParams.y = clamp(panelParams.y + bounds.top, 0,
-                Math.max(0, screen.y - bounds.height()));
-        final MediaControlAction[] pressed = new MediaControlAction[1];
-        final boolean[] handledByLongPress = new boolean[1];
-        final Handler padHandler = new Handler(Looper.getMainLooper());
-        // The window itself no longer answers touches, so a long press here is the escape hatch
-        // for users whose × handle is hidden by the close-button setting.
-        final Runnable openMenu = () -> {
-            if (pressed[0] == null) return;
-            handledByLongPress[0] = true;
-            pressed[0] = null;
-            pad.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-            showOverlayQuickMenu(pad, secondary);
-        };
-        pad.setOnTouchListener((v, event) -> {
-            float localX = event.getX() + bounds.left;
-            float localY = event.getY() + bounds.top;
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    pressed[0] = panel.playbackControlAt(localX, localY);
-                    handledByLongPress[0] = false;
-                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                    padHandler.removeCallbacks(openMenu);
-                    padHandler.postDelayed(openMenu, ViewConfiguration.getLongPressTimeout());
-                    return true;
-                case MotionEvent.ACTION_MOVE:
-                    if (pressed[0] != null && panel.playbackControlAt(localX, localY) != pressed[0]) {
-                        pressed[0] = null;
-                        padHandler.removeCallbacks(openMenu);
-                    }
-                    return true;
-                case MotionEvent.ACTION_UP:
-                    padHandler.removeCallbacks(openMenu);
-                    if (!handledByLongPress[0] && pressed[0] != null) {
-                        MusicNotificationListener.requestPlaybackControl(
-                                LyricsDisplayService.this, pressed[0]);
-                    }
-                    pressed[0] = null;
-                    return true;
-                default:
-                    padHandler.removeCallbacks(openMenu);
-                    pressed[0] = null;
-                    return true;
-            }
-        });
-        try {
-            manager.addView(pad, padParams);
-            if (secondary) {
-                secondaryPlaybackPad = pad;
-                secondaryPlaybackPadParams = padParams;
-            } else {
-                mainPlaybackPad = pad;
-                mainPlaybackPadParams = padParams;
-            }
-        } catch (Throwable error) {
-            Log.w(TAG, "Unable to add playback pad", error);
-        }
-    }
-
-    private boolean isPlaybackPadCurrent(boolean secondary, android.graphics.Rect bounds) {
-        View pad = secondary ? secondaryPlaybackPad : mainPlaybackPad;
-        WindowManager.LayoutParams padParams = secondary
-                ? secondaryPlaybackPadParams : mainPlaybackPadParams;
-        WindowManager.LayoutParams panelParams = secondary ? secondaryParams : mainParams;
-        if (pad == null || pad.getParent() == null || padParams == null || panelParams == null) {
-            return false;
-        }
-        return padParams.width == bounds.width() && padParams.height == bounds.height()
-                && padParams.x == panelParams.x + bounds.left
-                && padParams.y == panelParams.y + bounds.top;
-    }
-
-    private void removePlaybackPad(boolean secondary) {
-        WindowManager manager = secondary ? secondaryWindowManager : mainWindowManager;
-        View pad = secondary ? secondaryPlaybackPad : mainPlaybackPad;
-        if (manager != null && pad != null && pad.getParent() != null) {
-            try { manager.removeViewImmediate(pad); } catch (Throwable ignored) { }
-        }
-        if (secondary) {
-            secondaryPlaybackPad = null;
-            secondaryPlaybackPadParams = null;
-        } else {
-            mainPlaybackPad = null;
-            mainPlaybackPadParams = null;
-        }
-    }
-
-    /** Leaves either pass-through mode and gives the overlay its touches back. */
-    private void exitOverlayPassThrough(boolean secondary) {
-        AppPreferences.get(this).edit().putBoolean(secondary
-                ? AppPreferences.KEY_SECONDARY_OVERLAY_TOUCH_THROUGH
-                : AppPreferences.KEY_MAIN_OVERLAY_TOUCH_THROUGH, false).apply();
-        AppPreferences.putDisplayBoolean(this, secondary,
-                AppPreferences.KEY_OVERLAY_POSITION_LOCKED, false);
+    private void setOverlayTouchThrough(boolean secondary, boolean enabled) {
+        AppPreferences.putOverlayTouchThrough(this, secondary, enabled);
         applyOverlayInteraction(secondary);
-        // The × sits right next to the lyrics, so it gets tapped by accident while reaching for
-        // them. Say what just happened instead of silently clearing both switches (issue #36);
-        // the extra screens already announce their own unlock the same way.
-        SafeToast.show(this, "已解除位置锁定与触摸穿透", android.widget.Toast.LENGTH_SHORT);
+        if (enabled) notifyPassThroughDimming();
     }
 
     /**
-     * Android 12 and later block touches that pass through a window which is not (nearly)
-     * transparent, so a pass-through overlay has to give up five hundredths of its opacity. The
-     * lyrics then look dimmer than the user's own 背景不透明度 asks for, which is worth a word
-     * instead of leaving them to guess (issue #32). Below Android 12 nothing changes.
+     * A pass-through window has to give up five hundredths of its opacity for the system to let
+     * touches through at all, so the lyrics come out dimmer than the user's own colour asks for.
+     * That is worth saying out loud instead of leaving them to guess (issue #32).
      */
     private void notifyPassThroughDimming() {
         if (touchThroughWindowAlpha() >= 1f) return;
-        SafeToast.show(this, "Android 12 及以上要求穿透窗口的不透明度低于 80%，"
-                        + "所以整窗（包括歌词）会比平时略暗；这是系统限制，关掉锁定/穿透即恢复。",
+        SafeToast.show(this, "Android 12 及以上要求穿透窗口的不透明度低于 80%，所以整窗（包括歌词）"
+                        + "会比平时略暗；这是系统限制，在设置页关掉触摸穿透即恢复。",
                 android.widget.Toast.LENGTH_LONG);
     }
 
@@ -1023,143 +797,11 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? 0.79f : 1f;
     }
 
-    /**
-     * One tap only arms the × handle, a second tap inside {@link #EXIT_CONFIRM_MS} leaves
-     * pass-through. It used to exit on the first touch, which is exactly what happens when the
-     * user reaches for the lyrics and hits the handle instead (issue #36).
-     */
-    private static final long EXIT_CONFIRM_MS = 3_000L;
-
-    private boolean addUnlockHandle(final boolean secondary) {
-        WindowManager manager = secondary ? secondaryWindowManager : mainWindowManager;
-        WindowManager.LayoutParams panelParams = secondary ? secondaryParams : mainParams;
-        if (manager == null || panelParams == null) return false;
-        removeUnlockHandle(secondary);
-        final TextView handle = new TextView(secondary ? secondaryContext : this);
-        handle.setText("×");
-        handle.setTextColor(Color.WHITE);
-        handle.setTextSize(20f);
-        handle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        handle.setGravity(Gravity.CENTER);
-        handle.setContentDescription("点击取消悬浮窗穿透");
-        GradientDrawable circle = new GradientDrawable();
-        circle.setShape(GradientDrawable.OVAL);
-        String closeMode = AppPreferences.overlayCloseMode(this);
-        boolean weakened = "fade".equals(closeMode);
-        circle.setColor(weakened ? 0x55202124 : 0xCC202124);
-        circle.setStroke(dp(handle.getContext(), 1), weakened ? 0x55FFFFFF : 0xAAFFFFFF);
-        // Armed look for the first tap of the two-tap exit: different enough to be noticed even
-        // when the user did not mean to touch the handle at all (issue #36).
-        final GradientDrawable armedCircle = new GradientDrawable();
-        armedCircle.setShape(GradientDrawable.OVAL);
-        armedCircle.setColor(0xE6FF8A00);
-        armedCircle.setStroke(dp(handle.getContext(), 2), 0xFFFFFFFF);
-        final float restingAlpha = weakened ? 0.42f : 1f;
-        handle.setBackground(circle);
-        handle.setAlpha(restingAlpha);
-        if ("hidden".equals(closeMode)) handle.setVisibility(View.GONE);
-        int size = dp(handle.getContext(), 36);
-        int height = size;
-        final WindowManager.LayoutParams handleParams = new WindowManager.LayoutParams(
-                size, height,
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                        : WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                PixelFormat.TRANSLUCENT);
-        handleParams.gravity = Gravity.TOP | Gravity.START;
-        handleParams.x = clamp(panelParams.x + panelParams.width - size, 0,
-                Math.max(0, displaySize(secondary ? secondaryDisplay
-                        : mainWindowManager.getDefaultDisplay()).x - size));
-        handleParams.y = clamp(panelParams.y, 0,
-                Math.max(0, displaySize(secondary ? secondaryDisplay
-                        : mainWindowManager.getDefaultDisplay()).y - height));
-        final Object armedTag = new Object();
-        handle.setOnClickListener(v -> {
-            if (handle.getTag() == armedTag) {
-                handle.setTag(null);
-                exitOverlayPassThrough(secondary);
-                return;
-            }
-            // A single tap only shows what a second tap would do. The handle sits next to the
-            // lyrics, so tapping it while reaching for them used to reset both lock switches
-            // without a word (issue #36).
-            handle.animate().cancel();
-            handle.setTag(armedTag);
-            handle.setBackground(armedCircle);
-            handle.setAlpha(1f);
-            SafeToast.show(this, "再点一次解除位置锁定与触摸穿透", android.widget.Toast.LENGTH_SHORT);
-            handle.postDelayed(() -> {
-                if (handle.getTag() != armedTag) return;
-                handle.setTag(null);
-                handle.setBackground(circle);
-                handle.setAlpha(restingAlpha);
-                scheduleHandleAutoFade(handle, closeMode, 1_000L);
-            }, EXIT_CONFIRM_MS);
-        });
-        try {
-            manager.addView(handle, handleParams);
-            if (secondary) {
-                secondaryUnlockHandle = handle;
-                secondaryUnlockParams = handleParams;
-            } else {
-                mainUnlockHandle = handle;
-                mainUnlockParams = handleParams;
-            }
-            scheduleHandleAutoFade(handle, closeMode, 2_000L);
-        } catch (Throwable error) {
-            Log.w(TAG, "Unable to add overlay unlock handle", error);
-            return false;
-        }
-        return true;
-    }
-
-    /**
-     * The "weak"/"hidden" close modes do not show the handle all the time: it fades after a
-     * moment. Re-armed from the two-tap exit so the handle keeps behaving the way that mode asks
-     * for, and skipped while the handle is armed so the invitation stays visible.
-     */
-    private void scheduleHandleAutoFade(TextView handle, String closeMode, long delayMs) {
-        final float target;
-        if ("auto_fade".equals(closeMode)) {
-            target = 0.42f;
-        } else if ("auto_hide".equals(closeMode)) {
-            // Keep the fixed upper-right hit target so a hidden handle can still unlock.
-            target = 0f;
-        } else {
-            return;
-        }
-        handle.postDelayed(() -> {
-            if (handle.getTag() != null) return;
-            if (handle.getParent() != null) {
-                handle.animate().alpha(target).setDuration(180L).start();
-            }
-        }, delayMs);
-    }
-
-    private void removeUnlockHandle(boolean secondary) {
-        WindowManager manager = secondary ? secondaryWindowManager : mainWindowManager;
-        TextView handle = secondary ? secondaryUnlockHandle : mainUnlockHandle;
-        if (manager != null && handle != null && handle.getParent() != null) {
-            try { manager.removeViewImmediate(handle); }
-            catch (Throwable ignored) { }
-        }
-        if (secondary) {
-            secondaryUnlockHandle = null;
-            secondaryUnlockParams = null;
-        } else {
-            mainUnlockHandle = null;
-            mainUnlockParams = null;
-        }
-    }
 
     private void forceReturnOverlay(boolean mainOverlay) {
         String key = mainOverlay ? AppPreferences.KEY_MAIN_OVERLAY
                 : AppPreferences.KEY_SECONDARY_OVERLAY;
-        AppPreferences.get(this).edit().putBoolean(key, false)
-                .putBoolean(mainOverlay ? AppPreferences.KEY_MAIN_OVERLAY_TOUCH_THROUGH
-                        : AppPreferences.KEY_SECONDARY_OVERLAY_TOUCH_THROUGH, false).apply();
+        AppPreferences.get(this).edit().putBoolean(key, false).apply();
         if (mainOverlay) dismissMain();
         else dismissSecondary();
         DiagnosticLog.record(this, "Overlay", "double tap forced return "
@@ -1200,8 +842,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     }
 
     private void dismissMain() {
-        removeUnlockHandle(false);
-        removePlaybackPad(false);
         if (mainWindowManager != null && mainPanel != null && mainPanel.getParent() != null) {
             try { mainWindowManager.removeViewImmediate(mainPanel); }
             catch (Throwable ignored) { }
@@ -1212,8 +852,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     }
 
     private void dismissSecondary() {
-        removeUnlockHandle(true);
-        removePlaybackPad(true);
         if (secondaryWindowManager != null && secondaryPanel != null
                 && secondaryPanel.getParent() != null) {
             try { secondaryWindowManager.removeViewImmediate(secondaryPanel); }
@@ -1482,7 +1120,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
         // ...but Android 12+ refuses to pass touches through an opaque non-touchable overlay, so
         // the alpha has to come down for the pass-through to actually happen.
-        params.alpha = touchThroughWindowAlpha();
+        params.alpha = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? 0.79f : 1f;
         if (statusLyricStrip != null) {
             // Settings may change while the strip stays attached. Reload its compact renderer
             // and update its actual window bounds instead of returning with stale values.
@@ -1526,34 +1164,6 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         recoveryHandler.postDelayed(statusLyricRetry, delay);
         DiagnosticLog.record(this, "Overlay", "top lyric strip retry="
                 + statusLyricRetryAttempts + " delayMs=" + delay);
-    }
-
-    private void showBottomSpectrum() {
-        bottomSpectrumManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        if (bottomSpectrumManager == null) return;
-        int width = displaySize(bottomSpectrumManager.getDefaultDisplay()).x;
-        if (width <= 0) return;
-        bottomSpectrumView = new BottomSpectrumView(this);
-        WindowManager.LayoutParams params = overlayParams(width,
-                dp(this, AppPreferences.bottomSpectrumHeightDp(this)));
-        params.gravity = Gravity.BOTTOM | Gravity.START;
-        params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-        try {
-            bottomSpectrumManager.addView(bottomSpectrumView, params);
-        } catch (Throwable error) {
-            Log.w(TAG, "Unable to add bottom spectrum", error);
-            dismissBottomSpectrum();
-        }
-    }
-
-    private void dismissBottomSpectrum() {
-        if (bottomSpectrumManager != null && bottomSpectrumView != null
-                && bottomSpectrumView.getParent() != null) {
-            try { bottomSpectrumManager.removeViewImmediate(bottomSpectrumView); }
-            catch (Throwable ignored) { }
-        }
-        bottomSpectrumView = null;
-        bottomSpectrumManager = null;
     }
 
     private void updateStatusLyricStrip(MusicSnapshot snapshot) {
@@ -1605,14 +1215,13 @@ public final class LyricsDisplayService extends Service implements DisplayManage
                 || AppPreferences.secondaryEnabled(context)
                 || !DisplaySlotRegistry.entries(context).isEmpty()
                 || AppPreferences.notificationLyrics(context)
-                || AppPreferences.topLyricStrip(context)
-                || AppPreferences.bottomSpectrum(context));
+                || AppPreferences.topLyricStrip(context));
     }
 
     private static boolean hasRememberedOverlayTarget(Context context) {
         return AppPreferences.mainEnabled(context) || AppPreferences.secondaryEnabled(context)
                 || !DisplaySlotRegistry.entries(context).isEmpty()
-                || AppPreferences.topLyricStrip(context) || AppPreferences.bottomSpectrum(context);
+                || AppPreferences.topLyricStrip(context);
     }
 
     private void syncScreenReceiver() {
@@ -1728,11 +1337,9 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         if (hideMain) {
             dismissMain();
             dismissStatusLyricStrip();
-            dismissBottomSpectrum();
         } else if (canDrawOverlays()) {
             if (AppPreferences.mainEnabled(this) && !settingsVisible && mainPanel == null) showMain();
             if (AppPreferences.topLyricStrip(this) && statusLyricStrip == null) showStatusLyricStrip();
-            if (AppPreferences.bottomSpectrum(this) && bottomSpectrumView == null) showBottomSpectrum();
         }
         if (hideSecondary) {
             dismissSecondary();

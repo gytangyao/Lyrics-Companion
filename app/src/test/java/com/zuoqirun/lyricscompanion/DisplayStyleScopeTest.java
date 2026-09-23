@@ -48,7 +48,6 @@ public class DisplayStyleScopeTest {
         assertFalse(AppPreferences.isStyleScopedKey(AppPreferences.KEY_MAIN_OVERLAY_STYLE));
         assertFalse(AppPreferences.isStyleScopedKey(AppPreferences.KEY_SECONDARY_OVERLAY_STYLE));
         assertFalse(AppPreferences.isStyleScopedKey(AppPreferences.KEY_OVERLAY_POSITION_LOCKED));
-        assertFalse(AppPreferences.isStyleScopedKey(AppPreferences.KEY_MAIN_OVERLAY_TOUCH_THROUGH));
         assertFalse(AppPreferences.isStyleScopedKey(AppPreferences.KEY_LYRIC_OFFSET));
         assertFalse(AppPreferences.isStyleScopedKey(AppPreferences.KEY_HIDE_OVERLAYS_IN_APPS));
         assertFalse(AppPreferences.isStyleScopedKey(AppPreferences.KEY_LYRIC_CACHE_POLICY));

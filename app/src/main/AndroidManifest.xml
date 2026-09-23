@@ -4,7 +4,6 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -16,8 +15,6 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"
         tools:ignore="ScopedStorage" />
-    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
@@ -77,33 +74,6 @@
         android:theme="@style/AppTheme"
         tools:ignore="ScopedStorage">
         <activity
-            android:name=".LayoutEditorActivity"
-            android:exported="false" />
-        <activity
-            android:name=".RefinedSettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".CompactSettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".QuickDisplaySettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".StatusLyricSettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".ColorSettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".DisplaySettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".OverlayVisibilitySettingsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".FullscreenLyricsActivity"
-            android:exported="false" />
-        <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
@@ -135,17 +105,6 @@
             </intent-filter>
         </receiver>
 
-        <receiver android:name=".BluetoothAvrcpReceiver" android:exported="true">
-            <intent-filter>
-                <action android:name="android.bluetooth.avrcp-controller.profile.action.TRACK_EVENT" />
-                <action android:name="android.bluetooth.avrcp-controller.profile.action.PLAYBACK_STATE_CHANGED" />
-                <action android:name="android.bluetooth.avrcp-controller.profile.action.CONNECTION_STATE_CHANGED" />
-                <action android:name="com.android.bluetooth.avrcp-controller.profile.action.TRACK_EVENT" />
-                <action android:name="com.android.bluetooth.avrcp-controller.profile.action.PLAYBACK_STATE_CHANGED" />
-                <action android:name="com.android.bluetooth.music.metachanged" />
-                <action android:name="com.android.bluetooth.music.playstatechanged" />
-            </intent-filter>
-        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

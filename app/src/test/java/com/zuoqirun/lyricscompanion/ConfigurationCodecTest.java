@@ -7,7 +7,6 @@ import static org.junit.Assert.assertTrue;
 
 public class ConfigurationCodecTest {
     @Test public void privacySensitiveAndRuntimeKeysAreNotShareable() {
-        assertFalse(ConfigurationCodec.shareableKey(AppPreferences.KEY_COMMUNITY_CLIENT_ID));
         assertFalse(ConfigurationCodec.shareableKey(AppPreferences.KEY_FEEDBACK_TICKETS));
         assertFalse(ConfigurationCodec.shareableKey(AppPreferences.KEY_LOCAL_LYRIC_DIRECTORY_URI));
         assertFalse(ConfigurationCodec.shareableKey(AppPreferences.KEY_CUSTOM_FONT_FILE));
