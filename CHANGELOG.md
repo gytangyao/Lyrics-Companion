@@ -8,6 +8,7 @@
 - 设置界面合并为四个标签页（总览 / 显示 / 歌词 / 高级），并删除「精简设置模式」：应用本身已经只剩一行歌词，两套设置界面只是重复。
 - 删除已没有入口的功能与界面：底部频谱与频谱渲染、蓝牙 AVRCP 控制、全屏歌词页、粒子消散 / 逐字擦除 / 拖尾高亮等装饰动效、AMLL 匹配动画、布局编辑器（`LayoutEditorActivity` 及其视图与配置）、副屏位置摇杆、应用内更新器与 Markdown 渲染器、社区与反馈、首次使用引导与安全提示、崩溃上报。
   - 随这些界面一起删掉的还有 `ColorSettingsActivity`、`RefinedSettingsActivity`、`CompactSettingsActivity`、`QuickDisplaySettingsActivity`、`StatusLyricSettingsActivity`、`OverlayVisibilitySettingsActivity` 与最后失去全部入口的 `DisplaySettingsActivity`（连同清单声明）。
+- 悬浮歌词字号改到「显示」页：新增字号滑杆（16–48，松手才写入并刷新悬浮窗，避免拖动过程中反复重建窗口），与颜色一样按屏保存。此前字号只能从已删除的「尺寸与透明度」页调，等于没有入口。
 - 悬浮歌词颜色改到「显示」页，并拆成两项：「基础颜色」与「当前歌词」，各自单独取色。
   - 修好两处"设置了不生效"：取色器原先写的是顶部状态条的颜色键（悬浮窗渲染端根本不读），而当前歌词这一路在 compact 渲染里一直拿的是基础颜色。现在两个键都确认被渲染端读到。
   - 取色界面从 R/G/B 三根滑杆换成 HSV 调色盘：上方饱和度／明度方块＋色相条，拖动时色块与 `#RRGGBB` 实时跟着变。

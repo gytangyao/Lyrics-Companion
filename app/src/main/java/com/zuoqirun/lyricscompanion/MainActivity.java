@@ -29,6 +29,7 @@ import android.util.TypedValue;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -57,6 +58,8 @@ public final class MainActivity extends AppCompatActivity {
     private static final int REQUEST_LOCAL_LYRIC_DIRECTORY = 2419;
     private static final int REQUEST_LOCAL_LYRIC_STORAGE = 2421;
     private static final String STATE_SELECTED_SECTION = "selected_section";
+    private static final int LYRIC_FONT_SIZE_MIN_DP = 16;
+    private static final int LYRIC_FONT_SIZE_MAX_DP = 48;
     private static final String[] SECTION_LABELS = {"总览", "显示", "歌词", "高级"};
     private static final String[] SECTION_TITLES = {"设置总览", "显示与外观", "歌词来源与校准", "高级与维护"};
     private static final String[] SECTION_DESCRIPTIONS = {
@@ -81,6 +84,8 @@ public final class MainActivity extends AppCompatActivity {
     private MaterialSwitch autoStartSwitch;
     private LyricsPanelView previewPanel;
     private TextView globalFontSummary;
+    private SeekBar lyricFontSizeBar;
+    private TextView lyricFontSizeSummary;
     private MaterialButton baseColorButton;
     private MaterialButton currentColorButton;
     private TextView sectionHeading;
@@ -390,6 +395,7 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout appearanceCard = card();
         appearanceCard.addView(sectionLabel("字体"));
         addGlobalFontControls(appearanceCard);
+        addFloatingFontSizeControl(appearanceCard);
         addFloatingColorControls(appearanceCard);
 
         LinearLayout resetCard = card();
@@ -1011,6 +1017,38 @@ public final class MainActivity extends AppCompatActivity {
         resetParams.leftMargin = dp(10);
         row.addView(resetButton, resetParams);
         parent.addView(row);
+    }
+
+    private void addFloatingFontSizeControl(LinearLayout parent) {
+        TextView label = sectionLabel("悬浮歌词字号");
+        label.setPadding(0, dp(16), 0, dp(3));
+        parent.addView(label);
+        lyricFontSizeSummary = text("", 12, 0xFF9EAFBF, false);
+        lyricFontSizeSummary.setPadding(0, 0, 0, dp(2));
+        parent.addView(lyricFontSizeSummary);
+        lyricFontSizeBar = new SeekBar(this);
+        lyricFontSizeBar.setMax(LYRIC_FONT_SIZE_MAX_DP - LYRIC_FONT_SIZE_MIN_DP);
+        lyricFontSizeBar.setProgress(AppPreferences.refinedLyricFontSize(this, false)
+                - LYRIC_FONT_SIZE_MIN_DP);
+        showLyricFontSize(lyricFontSizeBar.getProgress() + LYRIC_FONT_SIZE_MIN_DP);
+        lyricFontSizeBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                showLyricFontSize(progress + LYRIC_FONT_SIZE_MIN_DP);
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar) { }
+            @Override public void onStopTrackingTouch(SeekBar bar) {
+                AppPreferences.setRefinedLyricFontSize(MainActivity.this, false,
+                        bar.getProgress() + LYRIC_FONT_SIZE_MIN_DP);
+                // Only persist once the finger lifts: refreshing the overlay on every tick would
+                // tear down and re-attach the window dozens of times per drag.
+                changed();
+            }
+        });
+        parent.addView(lyricFontSizeBar);
+    }
+
+    private void showLyricFontSize(int sizeDp) {
+        lyricFontSizeSummary.setText("当前：" + sizeDp + "（数字越大字越大，一行放不下时横向滚动）");
     }
 
     private void addFloatingColorControls(LinearLayout parent) {

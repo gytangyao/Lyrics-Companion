@@ -1158,6 +1158,11 @@ final class AppPreferences {
                 displayInt(context, secondary, KEY_REFINED_LYRIC_FONT_SIZE, 16)));
     }
 
+    static void setRefinedLyricFontSize(Context context, boolean secondary, int sizeDp) {
+        putDisplayInt(context, secondary, KEY_REFINED_LYRIC_FONT_SIZE,
+                Math.max(16, Math.min(96, sizeDp)));
+    }
+
     static String customFontFile(Context context) {
         return get(context).getString(KEY_CUSTOM_FONT_FILE, "");
     }
