@@ -327,7 +327,6 @@ final class MusicStateStore {
         if (generationForAlbumArt >= 0L) {
             scheduleAlbumArtLoad(generationForAlbumArt, newAlbumArtUri);
         }
-        AudioSpectrumSource.setPlaybackActive(context.getApplicationContext(), playing);
     }
 
     static void clear() {
@@ -365,7 +364,6 @@ final class MusicStateStore {
             CHANNEL_ARBITER.reset();
             cancelLyricLoadLocked();
         }
-        if (appContext != null) AudioSpectrumSource.setPlaybackActive(appContext, false);
         if (hadState && appContext != null) {
             DiagnosticLog.record(appContext, "Playback", "state cleared: no usable session");
         }
@@ -945,11 +943,10 @@ final class MusicStateStore {
      * Whether the player published a live lyric that can actually be shown.
      *
      * <p>A blank string is not a lyric. {@link LrcTimeline#liveLine(String)} trims what it renders,
-     * so accepting a blank one here let the display hand the panel over to an empty current line:
-     * {@code LyricsPanelView.currentText()} then fell through to 「即将开始」, and because the
-     * fallback kept answering "available" it never came back to the catalog timeline it had just
-     * abandoned — the panel stayed on that text for the whole track (issue #52). Deciding on the
-     * trimmed text keeps the two sides consistent.</p>
+     * so accepting a blank one here let the display hand over to an empty current line and, because
+     * the fallback kept answering "available", never come back to the catalog timeline it had just
+     * abandoned — the display stayed on placeholder text for the whole track (issue #52). Deciding
+     * on the trimmed text keeps the two sides consistent.</p>
      */
     static boolean isLiveLyricUsable(String liveLyric) {
         return liveLyric != null && !liveLyric.trim().isEmpty();

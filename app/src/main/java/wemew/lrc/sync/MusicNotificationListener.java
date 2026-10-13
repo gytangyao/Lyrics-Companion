@@ -183,7 +183,6 @@ public final class MusicNotificationListener extends NotificationListenerService
     private final Runnable reconnectAfterSystemDisconnect = new Runnable() {
         @Override public void run() {
             if (Build.VERSION.SDK_INT >= 24 && !connected
-                    && !AppPreferences.serviceStoppedByUser(MusicNotificationListener.this)
                     && hasNotificationAccess(MusicNotificationListener.this)) {
                 requestReconnect(MusicNotificationListener.this);
             }
@@ -195,10 +194,6 @@ public final class MusicNotificationListener extends NotificationListenerService
         DiagnosticLog.record(this, "MediaSession", "listener service created api="
                 + Build.VERSION.SDK_INT + " access=" + hasNotificationAccess(this));
         activeInstance = this;
-        if (AppPreferences.serviceStoppedByUser(this)) {
-            stopForExplicitExit();
-            return;
-        }
         MusicStateStore.initialize(this);
         lastNonEmptySessionElapsedMs = SystemClock.elapsedRealtime();
         // Android 4.4 predates onListenerConnected(); the system only creates this service
@@ -211,10 +206,6 @@ public final class MusicNotificationListener extends NotificationListenerService
 
     @Override public void onListenerConnected() {
         if (Build.VERSION.SDK_INT < 21) return;
-        if (AppPreferences.serviceStoppedByUser(this)) {
-            stopForExplicitExit();
-            return;
-        }
         handler.removeCallbacks(reconnectAfterSystemDisconnect);
         startListening();
     }
@@ -248,11 +239,6 @@ public final class MusicNotificationListener extends NotificationListenerService
                 + " using " + backendName);
         handler.removeCallbacks(sessionPoll);
         handler.postDelayed(sessionPoll, SESSION_POLL_MS);
-        if (AppPreferences.mainEnabled(this) || AppPreferences.secondaryEnabled(this)
-                || AppPreferences.notificationLyrics(this)
-                || AppPreferences.topLyricStrip(this)) {
-            LyricsDisplayService.startOrRefresh(this);
-        }
     }
 
     @Override public void onListenerDisconnected() {
@@ -260,8 +246,7 @@ public final class MusicNotificationListener extends NotificationListenerService
         stopListening();
         // API 24+ tells us that the system side has disconnected. Retry from this lifecycle
         // callback instead of racing the initial bind when the permission screen closes.
-        if (Build.VERSION.SDK_INT >= 24 && !AppPreferences.serviceStoppedByUser(this)
-                && hasNotificationAccess(this)) {
+        if (Build.VERSION.SDK_INT >= 24 && hasNotificationAccess(this)) {
             handler.postDelayed(reconnectAfterSystemDisconnect, 500L);
         }
     }
@@ -342,22 +327,6 @@ public final class MusicNotificationListener extends NotificationListenerService
         stopListening();
         if (activeInstance == this) activeInstance = null;
         super.onDestroy();
-    }
-
-    static void stopObservation() {
-        MusicNotificationListener instance = activeInstance;
-        if (instance != null) instance.stopForExplicitExit();
-    }
-
-    private void stopForExplicitExit() {
-        handler.removeCallbacks(legacyConnect);
-        handler.removeCallbacks(reconnectAfterSystemDisconnect);
-        stopListening();
-        if (Build.VERSION.SDK_INT >= 24) {
-            try { requestUnbind(); }
-            catch (Throwable ignored) { }
-        }
-        stopSelf();
     }
 
     static boolean openActivePlayer(Context context) {

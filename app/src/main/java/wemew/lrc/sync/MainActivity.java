@@ -3,8 +3,6 @@ package wemew.lrc.sync;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.ComponentName;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -18,18 +16,15 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.Settings;
-import android.text.InputFilter;
 import android.text.InputType;
-import android.text.Editable;
 import android.text.TextWatcher;
+import android.text.Editable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.util.TypedValue;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
-import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -54,21 +49,14 @@ import java.util.concurrent.Executors;
 
 @SuppressLint("SetTextI18n")
 public final class MainActivity extends AppCompatActivity {
-    private static final int REQUEST_CUSTOM_FONT = 2417;
     private static final int REQUEST_LOCAL_LYRIC_DIRECTORY = 2419;
     private static final int REQUEST_LOCAL_LYRIC_STORAGE = 2421;
-    private static final int REQUEST_RECORD_AUDIO = 2423;
-    private static final int REQUEST_PROJECTION = 2425;
     private static final String STATE_SELECTED_SECTION = "selected_section";
-    private static final int LYRIC_FONT_SIZE_MIN_DP = 16;
-    private static final int LYRIC_FONT_SIZE_MAX_DP = 48;
-    private static final String[] SECTION_LABELS = {"总览", "显示", "歌词", "高级"};
-    private static final String[] SECTION_TITLES = {"设置总览", "显示与外观", "歌词来源与校准", "高级与维护"};
+    private static final String[] SECTION_LABELS = {"状态", "歌词"};
+    private static final String[] SECTION_TITLES = {"状态与权限", "歌词来源与校准"};
     private static final String[] SECTION_DESCRIPTIONS = {
-            "先完成必要权限，打开悬浮歌词，再通过实时预览确认效果",
-            "查找尺寸、位置与主题设置",
-            "管理词库优先级、本地歌词和匹配修正",
-            "管理启动与交互和数据"
+            "先完成音乐读取权限，再打开网页歌词同步",
+            "管理词库优先级、本地歌词和匹配修正"
     };
     private static final ExecutorService SHARED_EXECUTOR = Executors.newSingleThreadExecutor();
     private static final long LISTENER_HEALTH_MAX_AGE_MS = 3_000L;
@@ -76,36 +64,20 @@ public final class MainActivity extends AppCompatActivity {
     private static final long LISTENER_RECONNECT_INTERVAL_MS = 1_000L;
     private static final long LISTENER_RECONNECT_WINDOW_MS = 30_000L;
     private static final int PERMISSION_CHECK_NOTIFICATION = 1;
-    private static final int PERMISSION_CHECK_OVERLAY = 1 << 1;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private TextView permissionStatus;
     private TextView musicStatus;
-    private MaterialSwitch mainOverlaySwitch;
-    private MaterialSwitch touchThroughSwitch;
-    private MaterialSwitch launchOverlaySwitch;
-    private MaterialSwitch autoStartSwitch;
-    private LyricsPanelView previewPanel;
-    private TextView globalFontSummary;
-    private SeekBar lyricFontSizeBar;
-    private TextView lyricFontSizeSummary;
-    private MaterialButton baseColorButton;
-    private MaterialButton currentColorButton;
-    private TextView spectrumStatus;
-    private LinearLayout styleButtonRow;
     private TextView sectionHeading;
     private TextView sectionDescription;
     private ScrollView mainScroll;
     private final List<View> sectionPages = new ArrayList<>();
     private final List<MaterialButton> sectionButtons = new ArrayList<>();
     private int selectedSection;
-    private boolean bindingUi;
     private boolean activityResumed;
-    private boolean stoppingAndExiting;
-    private int pendingPermissionFaqCheck;
-    private boolean permissionFaqDialogVisible;
+    private boolean permissionDialogVisible;
+    private int pendingPermissionCheck;
     private boolean listenerReconnectScheduled;
     private long listenerReconnectDeadlineElapsedMs;
-    private boolean launcherDispatch;
 
     private final Runnable statusRefresh = new Runnable() {
         @Override public void run() {
@@ -132,29 +104,18 @@ public final class MainActivity extends AppCompatActivity {
     };
 
     @Override protected void onCreate(Bundle savedInstanceState) {
-        // The companion's dense control surface is intentionally a stable dark workspace.
-        // Overlay lyrics can still use the separately selected light/dark environment.
+        // The settings surface is intentionally a stable dark workspace.
         getDelegate().setLocalNightMode(AppCompatDelegate.MODE_NIGHT_YES);
         super.onCreate(savedInstanceState);
         if (savedInstanceState != null) {
             selectedSection = savedInstanceState.getInt(STATE_SELECTED_SECTION, 0);
-        }
-        boolean launcherIntent = isLauncherIntent();
-        if (launcherIntent) {
-            AppPreferences.get(this).edit().remove("launch_overlay_target").apply();
-            AppPreferences.setServiceStoppedByUser(this, false);
-        }
-        if (launcherIntent && dispatchLauncherOverlay()) {
-            launcherDispatch = true;
-            finish();
-            return;
         }
         if (Build.VERSION.SDK_INT >= 21) {
             getWindow().setStatusBarColor(0xFF07111F);
             getWindow().setNavigationBarColor(0xFF07111F);
         }
         setContentView(buildContent());
-        CustomFontStore.applyToViewTree(this, getWindow().getDecorView());
+        applyUiScale(getWindow().getDecorView());
         MusicStateStore.initialize(this);
     }
 
@@ -165,91 +126,35 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override protected void onResume() {
         super.onResume();
-        if (launcherDispatch) return;
         activityResumed = true;
         ensureNotificationListenerConnected();
-        bindPreferences();
-        refreshPreview();
-        LyricsDisplayService.startOrRefresh(this);
-        LyricsDisplayService.setSettingsVisible(this, true);
         handler.removeCallbacks(statusRefresh);
         handler.post(statusRefresh);
         // Some ROMs update the permission state a moment after their Settings page closes.
         // Check after that hand-off so a newly granted switch never produces a false warning.
-        handler.postDelayed(this::promptPermissionFaqIfStillMissing, 350L);
+        handler.postDelayed(this::promptPermissionIfStillMissing, 350L);
     }
 
     @Override protected void onPause() {
-        if (launcherDispatch) {
-            super.onPause();
-            return;
-        }
         activityResumed = false;
         listenerReconnectScheduled = false;
         handler.removeCallbacks(listenerReconnect);
         handler.removeCallbacks(statusRefresh);
-        if (!stoppingAndExiting) LyricsDisplayService.setSettingsVisible(this, false);
         super.onPause();
-    }
-
-    private boolean isLauncherIntent() {
-        Intent intent = getIntent();
-        return intent != null && Intent.ACTION_MAIN.equals(intent.getAction())
-                && intent.hasCategory(Intent.CATEGORY_LAUNCHER);
-    }
-
-    private boolean dispatchLauncherOverlay() {
-        if (!AppPreferences.launchOverlayOnIcon(this)) return false;
-        long now = SystemClock.elapsedRealtime();
-        android.content.SharedPreferences preferences = AppPreferences.get(this);
-        long last = preferences.getLong(AppPreferences.KEY_LAUNCH_OVERLAY_LAST_AT, 0L);
-        if (last > 0L && now >= last && now - last <= 30_000L) {
-            preferences.edit().remove(AppPreferences.KEY_LAUNCH_OVERLAY_LAST_AT).apply();
-            return false;
-        }
-        if (!LyricsDisplayService.startRememberedFromLauncher(this)) return false;
-        preferences.edit().putLong(AppPreferences.KEY_LAUNCH_OVERLAY_LAST_AT, now).apply();
-        return true;
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQUEST_LOCAL_LYRIC_DIRECTORY) {
-            if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
-            Uri uri = data.getData();
-            try {
-                getContentResolver().takePersistableUriPermission(uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } catch (Throwable ignored) { }
-            AppPreferences.get(this).edit().putString(
-                    AppPreferences.KEY_LOCAL_LYRIC_DIRECTORY_URI, uri.toString()).apply();
-            MusicStateStore.reloadLyrics(this);
-            SafeToast.show(this, "已授权本地歌词目录", Toast.LENGTH_SHORT);
-            return;
-        }
-        if (requestCode == REQUEST_PROJECTION) {
-            if (resultCode == RESULT_OK && data != null) {
-                ProjectionTokenStore.store(resultCode, data);
-                SafeToast.show(this, "内录授权成功，开始播放音乐即可看到频谱", Toast.LENGTH_SHORT);
-            } else {
-                SafeToast.show(this, "未授权内录，将优先尝试系统混音采集", Toast.LENGTH_SHORT);
-            }
-            LyricsDisplayService.refreshSpectrum(this);
-            refreshSpectrumStatus();
-            return;
-        }
-        if (requestCode != REQUEST_CUSTOM_FONT || resultCode != RESULT_OK || data == null) return;
+        if (requestCode != REQUEST_LOCAL_LYRIC_DIRECTORY) return;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
-        if (uri == null) return;
         try {
-            String name = CustomFontStore.importFont(this, uri);
-            AppPreferences.changed(this);
-            SafeToast.show(this, "已全局应用字体：" + name, Toast.LENGTH_SHORT);
-            recreate();
-        } catch (Exception error) {
-            SafeToast.show(this, error.getMessage() == null ? "导入字体失败" : error.getMessage(),
-                    Toast.LENGTH_LONG);
-        }
+            getContentResolver().takePersistableUriPermission(uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (Throwable ignored) { }
+        AppPreferences.setLocalLyricDirectoryUri(this, uri.toString());
+        MusicStateStore.reloadLyrics(this);
+        SafeToast.show(this, "已授权本地歌词目录", Toast.LENGTH_SHORT);
     }
 
     private View buildContent() {
@@ -261,21 +166,12 @@ public final class MainActivity extends AppCompatActivity {
         mainScroll = shell.findViewById(R.id.main_scroll);
         MaterialToolbar toolbar = shell.findViewById(R.id.main_toolbar);
         toolbar.setTitle("微喵歌词同步");
-        toolbar.setSubtitle("主屏悬浮歌词");
+        toolbar.setSubtitle("网页歌词同步");
         toolbar.setTitleTextColor(Color.WHITE);
         toolbar.setSubtitleTextColor(0xFFA9B6C8);
         sectionHeading = shell.findViewById(R.id.main_section_heading);
         sectionDescription = shell.findViewById(R.id.main_section_description);
         sectionDescription.setLineSpacing(0f, 1.18f);
-
-        LinearLayout previewCard = card();
-        TextView previewLabel = sectionLabel("实时预览");
-        previewCard.addView(previewLabel);
-        previewPanel = new LyricsPanelView(this, false);
-        LinearLayout.LayoutParams previewLp = new LinearLayout.LayoutParams(-1,
-                previewHeightPx());
-        previewLp.topMargin = dp(10);
-        previewCard.addView(previewPanel, previewLp);
 
         LinearLayout accessCard = card();
         accessCard.addView(sectionLabel("使用权限"));
@@ -283,11 +179,21 @@ public final class MainActivity extends AppCompatActivity {
         permissionStatus.setPadding(0, dp(8), 0, dp(12));
         accessCard.addView(permissionStatus);
         addPermissionRow(accessCard, "音乐读取权限", true, v -> openNotificationAccess(),
-                "悬浮窗权限", false, v -> openOverlayPermission());
-        addPermissionRow(accessCard, "使用情况访问", false, v -> openUsageAccessSettings(),
                 "通知显示权限", false, v -> requestPostNotificationPermission());
         addPermissionRow(accessCard, "应用权限 / 自启动", false, v -> openApplicationDetails(),
                 null, false, null);
+
+        LinearLayout stateCard = card();
+        stateCard.addView(sectionLabel("音乐状态"));
+        musicStatus = text("等待播放器…", 14, 0xFFD8E1EE, false);
+        musicStatus.setLineSpacing(0f, 1.2f);
+        musicStatus.setPadding(0, dp(9), 0, 0);
+        stateCard.addView(musicStatus);
+        MaterialButton rematchLyrics = button("修正歌曲信息并重新匹配", false);
+        rematchLyrics.setOnClickListener(v -> showLyricRematchDialog());
+        LinearLayout.LayoutParams rematchParams = new LinearLayout.LayoutParams(-1, dp(48));
+        rematchParams.topMargin = dp(12);
+        stateCard.addView(rematchLyrics, rematchParams);
 
         LinearLayout lyricCard = card();
         lyricCard.addView(sectionLabel("歌词匹配"));
@@ -296,8 +202,7 @@ public final class MainActivity extends AppCompatActivity {
         addLyricCatalogSelector(lyricCard, playerCatalogFallback);
         playerCatalogFallback.setChecked(AppPreferences.playerCatalogFallback(this));
         playerCatalogFallback.setOnCheckedChangeListener((button, checked) -> {
-            AppPreferences.get(this).edit()
-                    .putBoolean(AppPreferences.KEY_PLAYER_CATALOG_FALLBACK, checked).apply();
+            AppPreferences.setPlayerCatalogFallback(this, checked);
             MusicStateStore.reloadLyrics(this);
         });
         lyricCard.addView(playerCatalogFallback);
@@ -306,8 +211,7 @@ public final class MainActivity extends AppCompatActivity {
                         + "最后才在已授权的音乐目录里按文件名、歌名或“歌手 - 歌名”搜索");
         localLyrics.setChecked(AppPreferences.localLyricEnabled(this));
         localLyrics.setOnCheckedChangeListener((button, checked) -> {
-            AppPreferences.get(this).edit()
-                    .putBoolean(AppPreferences.KEY_LOCAL_LYRIC_ENABLED, checked).apply();
+            AppPreferences.setLocalLyricEnabled(this, checked);
             MusicStateStore.reloadLyrics(this);
         });
         lyricCard.addView(localLyrics);
@@ -319,6 +223,11 @@ public final class MainActivity extends AppCompatActivity {
         MaterialButton localLyricPath = button("手动填写歌词目录路径", false);
         localLyricPath.setOnClickListener(v -> editLocalLyricDirectoryPath());
         lyricCard.addView(localLyricPath, new LinearLayout.LayoutParams(-1, dp(48)));
+        MaterialButton ignoredPlayers = button("忽略指定播放器", false);
+        ignoredPlayers.setOnClickListener(v -> showIgnoredPlayerPicker());
+        LinearLayout.LayoutParams ignoredPlayersParams = new LinearLayout.LayoutParams(-1, dp(48));
+        ignoredPlayersParams.topMargin = dp(8);
+        lyricCard.addView(ignoredPlayers, ignoredPlayersParams);
         // issue #44：匹配到的歌词长时间不滚动时，改用播放器实时歌词。
         MaterialSwitch stuckFallback = toggle("匹配歌词长时间不滚动时改用播放器实时歌词",
                 "偶尔会匹配到一条一直停在第一句的时间轴：当播放进度在推进、当前行超过 25 秒"
@@ -336,109 +245,20 @@ public final class MainActivity extends AppCompatActivity {
                         + "则作为实时歌词显示；解析不出时保持原样");
         compositeIdentity.setChecked(AppPreferences.compositeIdentityFromArtist(this));
         compositeIdentity.setOnCheckedChangeListener((button, checked) -> {
-            AppPreferences.get(this).edit()
-                    .putBoolean(AppPreferences.KEY_COMPOSITE_IDENTITY_FROM_ARTIST, checked).apply();
+            AppPreferences.setCompositeIdentityFromArtist(this, checked);
         });
         lyricCard.addView(compositeIdentity);
-
-        LinearLayout outputCard = card();
-        outputCard.addView(sectionLabel("歌词显示开关"));
-        mainOverlaySwitch = toggle("主屏悬浮窗",
-                "离开设置页后显示；可拖动，双击强制返回，长按弹出锁定位置与触摸穿透的菜单");
-        mainOverlaySwitch.setOnCheckedChangeListener((button, checked) -> {
-            if (bindingUi) return;
-            AppPreferences.get(this).edit().putBoolean(AppPreferences.KEY_MAIN_OVERLAY, checked).apply();
-            if (checked && !canDrawOverlays()) showPermissionHomeHint("悬浮窗");
-            AppPreferences.changed(this);
-            LyricsDisplayService.setSettingsVisible(this, true);
-        });
-        outputCard.addView(mainOverlaySwitch);
-        touchThroughSwitch = toggle("触摸穿透",
-                "歌词不再接收任何触摸，点击全部落到下面的应用；开启后只能回到这里关闭");
-        touchThroughSwitch.setOnCheckedChangeListener((button, checked) -> {
-            if (bindingUi) return;
-            AppPreferences.putOverlayTouchThrough(this, false, checked);
-            AppPreferences.changed(this);
-            LyricsDisplayService.setSettingsVisible(this, true);
-        });
-        outputCard.addView(touchThroughSwitch);
-
-        LinearLayout startupCard = card();
-        startupCard.addView(sectionLabel("启动与交互"));
-        launchOverlaySwitch = toggle("点击图标启动悬浮窗",
-                "开启后首次点击图标按已记忆的主屏和副屏恢复显示；30 秒内再次点击进入主界面");
-        launchOverlaySwitch.setChecked(AppPreferences.launchOverlayOnIcon(this));
-        launchOverlaySwitch.setOnCheckedChangeListener((button, checked) -> {
-            if (bindingUi) return;
-            AppPreferences.get(this).edit()
-                    .putBoolean(AppPreferences.KEY_LAUNCH_OVERLAY_ON_ICON, checked)
-                    .remove(AppPreferences.KEY_LAUNCH_OVERLAY_LAST_AT)
-                    .apply();
-        });
-        startupCard.addView(launchOverlaySwitch);
-        autoStartSwitch = toggle("开机 / 亮屏自启动悬浮窗",
-                "在重启或每次亮屏时恢复已记忆的主屏和副屏歌词。关闭服务并退出不会改变此项。");
-        autoStartSwitch.setChecked(AppPreferences.autoStartOverlays(this));
-        autoStartSwitch.setOnCheckedChangeListener((button, checked) -> {
-            if (bindingUi) return;
-            AppPreferences.get(this).edit()
-                    .putBoolean(AppPreferences.KEY_AUTO_START_OVERLAYS, checked).apply();
-            if (checked) {
-                boolean addedDefaultTarget = AppPreferences.ensureAutoStartOverlayTarget(this);
-                AppPreferences.setServiceStoppedByUser(this, false);
-                if (addedDefaultTarget && mainOverlaySwitch != null) {
-                    mainOverlaySwitch.setChecked(true);
-                }
-            }
-            LyricsDisplayService.startOrRefresh(this);
-        });
-        startupCard.addView(autoStartSwitch);
-        MaterialSwitch returnToPlayer = toggle("轻触悬浮窗返回播放器",
-                "关闭时打开歌词伴侣；无法打开播放器时会自动回到歌词伴侣");
-        returnToPlayer.setChecked(AppPreferences.tapOverlayReturnsToPlayer(this));
-        returnToPlayer.setOnCheckedChangeListener((button, checked) -> AppPreferences.get(this)
-                .edit().putBoolean(AppPreferences.KEY_TAP_OVERLAY_RETURNS_TO_PLAYER, checked)
-                .apply());
-        startupCard.addView(returnToPlayer);
-
-        MaterialButton stopService = button("关闭服务并退出", false);
-        stopService.setOnClickListener(v -> confirmStopServiceAndExit());
-        LinearLayout.LayoutParams stopServiceParams = new LinearLayout.LayoutParams(-1, dp(48));
-        stopServiceParams.topMargin = dp(12);
-        startupCard.addView(stopService, stopServiceParams);
-
-        LinearLayout appearanceCard = card();
-        appearanceCard.addView(sectionLabel("字体"));
-        addGlobalFontControls(appearanceCard);
-        addFloatingFontSizeControl(appearanceCard);
-        addFloatingColorControls(appearanceCard);
-
-        LinearLayout spectrumCard = card();
-        spectrumCard.addView(sectionLabel("频谱背景"));
-        addSpectrumControls(spectrumCard);
 
         LinearLayout resetCard = card();
         resetCard.addView(sectionLabel("数据与重置"));
         TextView resetSummary = text(
-                "恢复显示、歌词、启动、本地目录和字体等默认设置。",
+                "恢复歌词匹配、本地目录和网页服务等默认设置。",
                 12, 0xFF8392A8, false);
         resetSummary.setPadding(0, dp(9), 0, dp(10));
         resetCard.addView(resetSummary);
         MaterialButton resetSettings = button("恢复默认设置", false);
         resetSettings.setOnClickListener(v -> confirmResetSettings());
         resetCard.addView(resetSettings, new LinearLayout.LayoutParams(-1, dp(48)));
-
-        LinearLayout stateCard = card();
-        stateCard.addView(sectionLabel("音乐状态"));
-        musicStatus = text("等待播放器…", 14, 0xFFD8E1EE, false);
-        musicStatus.setLineSpacing(0f, 1.2f);
-        musicStatus.setPadding(0, dp(9), 0, 0);
-        stateCard.addView(musicStatus);
-        MaterialButton rematchLyrics = button("修正歌曲信息并重新匹配", false);
-        rematchLyrics.setOnClickListener(v -> showLyricRematchDialog());
-        LinearLayout.LayoutParams rematchParams = new LinearLayout.LayoutParams(-1, dp(48));
-        rematchParams.topMargin = dp(12);
-        stateCard.addView(rematchLyrics, rematchParams);
 
         LinearLayout uiScaleCard = card();
         uiScaleCard.addView(sectionLabel("设置界面"));
@@ -447,32 +267,21 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout homePage = sectionPage();
         homePage.addView(uiScaleCard, cardMargins());
         homePage.addView(accessCard, cardMargins());
-        homePage.addView(outputCard, cardMargins());
-        homePage.addView(previewCard, cardMargins());
-
-        LinearLayout displayPage = sectionPage();
-        displayPage.addView(appearanceCard, cardMargins());
-        displayPage.addView(spectrumCard, cardMargins());
+        homePage.addView(stateCard, cardMargins());
 
         LinearLayout lyricsPage = sectionPage();
         lyricsPage.addView(lyricCard, cardMargins());
-        lyricsPage.addView(stateCard, cardMargins());
+        lyricsPage.addView(resetCard, cardMargins());
 
-        LinearLayout systemPage = sectionPage();
-        systemPage.addView(startupCard, cardMargins());
-        systemPage.addView(resetCard, cardMargins());
-
-        TextView footnote = text("提示：在线、本地和 U 盘播放器优先读取系统媒体信息，缺失时尝试识别音乐通知；通知未提供进度时无法精准自动滚动。匹配歌词优先复用本地缓存；文件名会自动清理路径、序号、扩展名和音质标记，仍不准确时可用“修正歌曲信息并重新匹配”。歌词伴侣不会向 iPhone CarPlay 仪表盘注入媒体信息。", 12,
+        TextView footnote = text("提示：在线、本地和 U 盘播放器优先读取系统媒体信息，缺失时尝试识别音乐通知；通知未提供进度时无法精准自动滚动。匹配歌词优先复用本地缓存；文件名会自动清理路径、序号、扩展名和音质标记，仍不准确时可用“修正歌曲信息并重新匹配”。", 12,
                 0xFF66788F, false);
         footnote.setLineSpacing(0f, 1.25f);
         LinearLayout.LayoutParams footnoteParams = new LinearLayout.LayoutParams(-1, -2);
         footnoteParams.topMargin = dp(16);
-        systemPage.addView(footnote, footnoteParams);
+        lyricsPage.addView(footnote, footnoteParams);
 
         sectionPages.add(homePage);
-        sectionPages.add(displayPage);
         sectionPages.add(lyricsPage);
-        sectionPages.add(systemPage);
         for (View page : sectionPages) {
             pageHost.addView(page, new LinearLayout.LayoutParams(-1, -2));
         }
@@ -489,7 +298,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void bindSectionNavigation(View shell) {
-        int[] ids = {R.id.nav_home, R.id.nav_display, R.id.nav_lyrics, R.id.nav_system};
+        int[] ids = {R.id.nav_home, R.id.nav_lyrics};
         for (int index = 0; index < ids.length; index++) {
             final int section = index;
             MaterialButton item = shell.findViewById(ids[index]);
@@ -540,22 +349,6 @@ public final class MainActivity extends AppCompatActivity {
 
     private String sectionDescription(int section) {
         return SECTION_DESCRIPTIONS[section];
-    }
-
-    private void confirmStopServiceAndExit() {
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("关闭歌词服务")
-                .setMessage("将移除所有悬浮歌词并停止音乐监听。若保留开机/亮屏自启动，会留下最小启动待命服务以接收亮屏事件；关闭该选项才会完全停止所有服务。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("关闭并退出", (dialog, which) -> stopServiceAndExit())
-                .show();
-    }
-
-    private void stopServiceAndExit() {
-        stoppingAndExiting = true;
-        LyricsDisplayService.stopAndRememberOverlays(this);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) finishAndRemoveTask();
-        else finish();
     }
 
     private void addLyricCatalogSelector(LinearLayout parent,
@@ -682,10 +475,54 @@ public final class MainActivity extends AppCompatActivity {
                             AppPreferences.putPlayerPackageLyricCatalog(this, app.packageName, "");
                         }
                     }
-                    AppPreferences.changed(this);
                     MusicStateStore.reloadLyrics(this);
-                    refreshPreview();
                     SafeToast.show(this, "已保存 " + catalogLabel + " 强制匹配应用", Toast.LENGTH_SHORT);
+                })
+                .show();
+    }
+
+    /** issue #35：车机自带的媒体中心、导航或蓝牙通道常常抢走歌词，把它们列进忽略名单。 */
+    private void showIgnoredPlayerPicker() {
+        LinearLayout loading = new LinearLayout(this);
+        loading.setPadding(dp(24), dp(16), dp(24), dp(16));
+        loading.addView(text("正在读取已安装应用…", 14, 0xFFD8E1EE, false));
+        AlertDialog loadingDialog = new MaterialAlertDialogBuilder(this)
+                .setTitle("忽略指定播放器")
+                .setView(loading)
+                .setNegativeButton("取消", null)
+                .show();
+        SHARED_EXECUTOR.execute(() -> {
+            List<InstalledAppListCache.AppChoice> apps = InstalledAppListCache.load(this,
+                    AppPreferences.observedPlayerPackages(this));
+            handler.post(() -> {
+                if (loadingDialog.isShowing()) loadingDialog.dismiss();
+                if (isFinishing() || (Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
+                showLoadedIgnoredPlayerPicker(apps);
+            });
+        });
+    }
+
+    private void showLoadedIgnoredPlayerPicker(List<InstalledAppListCache.AppChoice> apps) {
+        Set<String> selected = AppPreferences.ignoredPlayerPackages(this);
+        ListView list = new ListView(this);
+        list.setDividerHeight(0);
+        list.setBackgroundColor(0xFF101E31);
+        AppChoiceListAdapter adapter = new AppChoiceListAdapter(this, apps, selected);
+        list.setAdapter(adapter);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(4), 0, dp(4), 0);
+        content.addView(appSearchField(adapter));
+        content.addView(list, new LinearLayout.LayoutParams(-1, dp(440)));
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("忽略指定播放器")
+                .setView(content)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    AppPreferences.setIgnoredPlayerPackages(this, selected);
+                    MusicStateStore.reloadLyrics(this);
+                    SafeToast.show(this, "已保存忽略名单（" + selected.size() + " 个应用）",
+                            Toast.LENGTH_SHORT);
                 })
                 .show();
     }
@@ -717,29 +554,11 @@ public final class MainActivity extends AppCompatActivity {
         return input;
     }
 
-    private void bindPreferences() {
-        bindingUi = true;
-        mainOverlaySwitch.setChecked(AppPreferences.mainEnabled(this));
-        touchThroughSwitch.setChecked(AppPreferences.overlayTouchThrough(this, false));
-        launchOverlaySwitch.setChecked(AppPreferences.launchOverlayOnIcon(this));
-        autoStartSwitch.setChecked(AppPreferences.autoStartOverlays(this));
-        bindingUi = false;
-    }
-
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions,
                                                       int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == 101) {
-            LyricsDisplayService.startOrRefresh(this);
-            refreshPreview();
             refreshStatus();
-        } else if (requestCode == REQUEST_RECORD_AUDIO) {
-            boolean granted = grantResults.length > 0
-                    && grantResults[0] == PackageManager.PERMISSION_GRANTED;
-            SafeToast.show(this, granted ? "录音权限已授权" : "未授权录音权限，频谱无法采集",
-                    Toast.LENGTH_SHORT);
-            LyricsDisplayService.refreshSpectrum(this);
-            refreshSpectrumStatus();
         } else if (requestCode == REQUEST_LOCAL_LYRIC_STORAGE) {
             SafeToast.show(this, LocalLyricClient.canReadManualDirectory(this)
                     ? "已授予存储读取权限，正在重新读取本地歌词"
@@ -750,19 +569,14 @@ public final class MainActivity extends AppCompatActivity {
 
     private void refreshStatus() {
         boolean notificationAccess = hasNotificationAccess();
-        boolean overlay = canDrawOverlays();
         boolean postNotifications = Build.VERSION.SDK_INT < 33
                 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 == PackageManager.PERMISSION_GRANTED;
-        boolean usageAccess = ForegroundAppDetector.hasUsageAccess(this);
         String listenerState = listenerState(notificationAccess);
         permissionStatus.setText("通知读取  " + (notificationAccess ? "已授权" : "未授权")
                 + "     监听器  " + listenerState
-                + "     悬浮窗  " + permissionState(overlay)
-                + "\n通知显示  " + permissionState(postNotifications)
-                + "     使用情况  " + permissionState(usageAccess));
-        permissionStatus.setTextColor(notificationAccess && overlay
-                ? 0xFF6EE7F2 : 0xFFFFCA66);
+                + "\n通知显示  " + permissionState(postNotifications));
+        permissionStatus.setTextColor(notificationAccess ? 0xFF6EE7F2 : 0xFFFFCA66);
         long lastRead = MusicNotificationListener.getLastSuccessfulSessionReadElapsedMs();
         String error = MusicNotificationListener.getLastSessionError();
         if (error == null || error.trim().isEmpty()) error = "无";
@@ -775,7 +589,6 @@ public final class MainActivity extends AppCompatActivity {
                 + "\n最近成功读取会话：" + formatSessionReadAge(lastRead)
                 + "    当前会话数量：" + MusicNotificationListener.getLastSessionCount()
                 + "\n最近异常信息：" + error);
-        refreshSpectrumStatus();
     }
 
     /** Enlarges controls on low-density automotive screens without affecting lyric typography. */
@@ -802,7 +615,7 @@ public final class MainActivity extends AppCompatActivity {
             @Override public void onNothingSelected(android.widget.AdapterView<?> parentView) { }
         });
         parent.addView(spinner, new LinearLayout.LayoutParams(-1, dp(52)));
-        TextView note = text("仅放大设置页面的文字与控件，不改变悬浮歌词字号。", 12,
+        TextView note = text("仅放大设置页面的文字与控件，不改变网页端字号。", 12,
                 0xFF74869D, false);
         note.setPadding(0, dp(3), 0, dp(2));
         parent.addView(note);
@@ -817,96 +630,6 @@ public final class MainActivity extends AppCompatActivity {
         view.setPadding(0, dp(12), 0, dp(6));
         view.setLineSpacing(0f, 1.15f);
         return view;
-    }
-
-    private void showFaqPanel() {
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(4), dp(2), dp(4), dp(8));
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.addView(content, new ScrollView.LayoutParams(-1, -2));
-        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
-                .setTitle("常见问题")
-                .setView(scroll)
-                .setPositiveButton("关闭", null)
-                .create();
-        renderFaq(content, FaqClient.cached(this), "正在从服务器同步 FAQ…");
-        dialog.show();
-        FaqClient.fetchAsync(this, result -> runOnUiThread(() -> {
-            if (isFinishing() || isDestroyed() || !dialog.isShowing()) return;
-            renderFaq(content, result.document,
-                    result.refreshed ? "已同步最新 FAQ" : result.document == null
-                            ? "服务器暂时无法连接，暂无本地缓存" : "当前显示本地缓存，服务器暂时无法连接");
-        }));
-    }
-
-    private void renderFaq(LinearLayout content, FaqClient.FaqDocument document, String status) {
-        content.removeAllViews();
-        TextView state = text(status + (document != null && !document.updatedAt.isEmpty()
-                        ? "\n更新时间：" + document.updatedAt : ""),
-                12, themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant,
-                        0xFF8392A8), false);
-        state.setLineSpacing(0f, 1.2f);
-        state.setPadding(0, 0, 0, dp(12));
-        content.addView(state);
-        if (document == null) {
-            TextView empty = text("暂时没有可显示的 FAQ，请稍后重试。", 14,
-                    themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant,
-                            0xFF8392A8), false);
-            content.addView(empty);
-            return;
-        }
-        for (FaqClient.Item item : document.items) {
-            TextView question = text(item.question, 16,
-                    themeColor(com.google.android.material.R.attr.colorOnSurface, 0xFFF2F6FB), true);
-            question.setPadding(0, dp(8), 0, dp(6));
-            content.addView(question);
-            if (!item.answer.isEmpty()) {
-                TextView answer = text(item.answer, 14,
-                        themeColor(com.google.android.material.R.attr.colorOnSurface, 0xFFD8E1EE), false);
-                answer.setLineSpacing(0f, 1.2f);
-                content.addView(answer);
-            }
-            for (FaqClient.Instruction instruction : item.instructions) {
-                TextView title = text(instruction.title, 13,
-                        themeColor(com.google.android.material.R.attr.colorPrimary, 0xFF6EE7F2), true);
-                title.setPadding(0, dp(10), 0, dp(4));
-                content.addView(title);
-                addFaqCommand(content, instruction.command);
-            }
-            if (!item.note.isEmpty()) {
-                TextView note = text(item.note, 12,
-                        themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant,
-                                0xFF8392A8), false);
-                note.setLineSpacing(0f, 1.2f);
-                note.setPadding(0, dp(8), 0, dp(4));
-                content.addView(note);
-            }
-        }
-    }
-
-    private void addFaqCommand(LinearLayout parent, String command) {
-        LinearLayout row = new LinearLayout(this);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        TextView value = text(command, 12,
-                themeColor(com.google.android.material.R.attr.colorOnSurface, 0xFFF2F6FB), false);
-        value.setTextIsSelectable(true);
-        value.setTypeface(android.graphics.Typeface.MONOSPACE);
-        value.setLineSpacing(0f, 1.1f);
-        value.setPadding(dp(10), dp(8), dp(10), dp(8));
-        value.setBackground(solid(0xFF25364D, 8));
-        row.addView(value, new LinearLayout.LayoutParams(0, -2, 1f));
-        MaterialButton copy = button("复制", false);
-        copy.setOnClickListener(v -> {
-            ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("FAQ 命令", command));
-            SafeToast.show(this, "命令已复制", Toast.LENGTH_SHORT);
-        });
-        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(dp(64), dp(44));
-        copyParams.leftMargin = dp(8);
-        row.addView(copy, copyParams);
-        parent.addView(row);
     }
 
     private void showLyricRematchDialog() {
@@ -966,36 +689,10 @@ public final class MainActivity extends AppCompatActivity {
                     if (requestedTitle.isEmpty()) requestedTitle = snapshot.title;
                     MusicStateStore.reloadLyrics(this, requestedTitle, requestedArtist,
                             catalogs[catalogSpinner.getSelectedItemPosition()]);
-                    refreshPreview();
                     SafeToast.show(this, "已按修正后的歌曲信息开始匹配",
                             Toast.LENGTH_SHORT);
                 })
                 .show();
-    }
-
-    private void refreshPreview() {
-        if (previewPanel == null) return;
-        previewPanel.reloadStyle();
-        ViewGroup.LayoutParams params = previewPanel.getLayoutParams();
-        if (params != null) {
-            params.height = previewHeightPx();
-            previewPanel.setLayoutParams(params);
-        }
-    }
-
-    private int previewHeightPx() {
-        float density = getResources().getDisplayMetrics().density;
-        float screenWidthDp = getResources().getDisplayMetrics().widthPixels / density;
-        float availableWidthDp = screenWidthDp - (useSideNavigation() ? 104f : 0f) - 72f;
-        float aspectHeightDp = availableWidthDp * AppPreferences.panelHeightDp(this)
-                / (float) AppPreferences.panelWidthDp(this);
-        return dp(Math.max(AppPreferences.minimumPanelHeightDp(this),
-                Math.min(420f, aspectHeightDp)));
-    }
-
-    private boolean useSideNavigation() {
-        return getResources().getConfiguration().orientation
-                == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
     }
 
     private LinearLayout card() {
@@ -1003,7 +700,7 @@ public final class MainActivity extends AppCompatActivity {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(16), dp(15), dp(16), dp(16));
         MaterialShapeDrawable surface = new MaterialShapeDrawable();
-        surface.setFillColor(android.content.res.ColorStateList.valueOf(
+        surface.setFillColor(ColorStateList.valueOf(
                 themeColor(com.google.android.material.R.attr.colorSurfaceContainer, 0xFF101E31)));
         surface.setCornerSize(dp(20));
         surface.setElevation(dp(1));
@@ -1022,259 +719,28 @@ public final class MainActivity extends AppCompatActivity {
                 0xFF6EE7F2), true);
     }
 
-    private void addGlobalFontControls(LinearLayout parent) {
-        TextView label = sectionLabel("全局字体");
-        label.setPadding(0, dp(16), 0, dp(3));
-        parent.addView(label);
-        globalFontSummary = text("当前：" + CustomFontStore.selectedFontLabel(this)
-                + "（替换应用界面与全部歌词，支持 TTF / OTF / TTC）",
-                12, 0xFF9EAFBF, false);
-        globalFontSummary.setPadding(0, 0, 0, dp(6));
-        parent.addView(globalFontSummary);
-        LinearLayout row = new LinearLayout(this);
-        MaterialButton importButton = button("导入全局字体", false);
-        importButton.setOnClickListener(v -> openFontPicker());
-        row.addView(importButton, new LinearLayout.LayoutParams(0, dp(46), 1f));
-        MaterialButton resetButton = button("恢复系统字体", false);
-        resetButton.setOnClickListener(v -> {
-            CustomFontStore.clear(this);
-            AppPreferences.changed(this);
-            recreate();
-        });
-        LinearLayout.LayoutParams resetParams = new LinearLayout.LayoutParams(0, dp(46), 1f);
-        resetParams.leftMargin = dp(10);
-        row.addView(resetButton, resetParams);
-        parent.addView(row);
+    private void confirmResetSettings() {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("恢复默认设置？")
+                .setMessage("将清除歌词匹配规则、本地歌词目录和网页服务设置。")
+                .setPositiveButton("恢复默认", (dialog, which) -> resetSettingsToDefaults())
+                .setNegativeButton("取消", null)
+                .show();
     }
 
-    private void addFloatingFontSizeControl(LinearLayout parent) {
-        TextView label = sectionLabel("悬浮歌词字号");
-        label.setPadding(0, dp(16), 0, dp(3));
-        parent.addView(label);
-        lyricFontSizeSummary = text("", 12, 0xFF9EAFBF, false);
-        lyricFontSizeSummary.setPadding(0, 0, 0, dp(2));
-        parent.addView(lyricFontSizeSummary);
-        lyricFontSizeBar = new SeekBar(this);
-        lyricFontSizeBar.setMax(LYRIC_FONT_SIZE_MAX_DP - LYRIC_FONT_SIZE_MIN_DP);
-        lyricFontSizeBar.setProgress(AppPreferences.refinedLyricFontSize(this, false)
-                - LYRIC_FONT_SIZE_MIN_DP);
-        showLyricFontSize(lyricFontSizeBar.getProgress() + LYRIC_FONT_SIZE_MIN_DP);
-        lyricFontSizeBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
-                showLyricFontSize(progress + LYRIC_FONT_SIZE_MIN_DP);
-            }
-            @Override public void onStartTrackingTouch(SeekBar bar) { }
-            @Override public void onStopTrackingTouch(SeekBar bar) {
-                AppPreferences.setRefinedLyricFontSize(MainActivity.this, false,
-                        bar.getProgress() + LYRIC_FONT_SIZE_MIN_DP);
-                // Only persist once the finger lifts: refreshing the overlay on every tick would
-                // tear down and re-attach the window dozens of times per drag.
-                changed();
-            }
-        });
-        parent.addView(lyricFontSizeBar);
-    }
-
-    private void showLyricFontSize(int sizeDp) {
-        lyricFontSizeSummary.setText("当前：" + sizeDp + "（数字越大字越大，一行放不下时横向滚动）");
-    }
-
-    private void addFloatingColorControls(LinearLayout parent) {
-        TextView label = sectionLabel("悬浮歌词颜色");
-        label.setPadding(0, dp(16), 0, dp(3));
-        parent.addView(label);
-
-        baseColorButton = new MaterialButton(this);
-        updateColorButton(baseColorButton, AppPreferences.lyricColor(this, false), "基础颜色");
-        baseColorButton.setAllCaps(false);
-        baseColorButton.setCornerRadius(dp(12));
-        baseColorButton.setOnClickListener(v -> ColorPickerDialog.show(this,
-                AppPreferences.lyricColor(this, false), picked -> {
-                    AppPreferences.setLyricColor(this, false, picked);
-                    updateColorButton(baseColorButton, picked, "基础颜色");
-                    changed();
-                }));
-        parent.addView(baseColorButton, new LinearLayout.LayoutParams(-1, dp(48)));
-
-        currentColorButton = new MaterialButton(this);
-        updateColorButton(currentColorButton, AppPreferences.currentLyricColor(this, false), "当前歌词");
-        currentColorButton.setAllCaps(false);
-        currentColorButton.setCornerRadius(dp(12));
-        currentColorButton.setOnClickListener(v -> ColorPickerDialog.show(this,
-                AppPreferences.currentLyricColor(this, false), picked -> {
-                    AppPreferences.setCurrentLyricColor(this, false, picked);
-                    updateColorButton(currentColorButton, picked, "当前歌词");
-                    changed();
-                }));
-        LinearLayout.LayoutParams currentParams = new LinearLayout.LayoutParams(-1, dp(48));
-        currentParams.topMargin = dp(6);
-        parent.addView(currentColorButton, currentParams);
-    }
-
-    private void updateColorButton(MaterialButton button, int color, String label) {
-        int display = color == 0 ? 0xFFFFFFFF : color;
-        button.setText(label + "  " + String.format(java.util.Locale.US, "#%06X", display & 0xFFFFFF));
-        button.setTextSize(14f);
-        button.setBackgroundColor(display);
-        int r = (display >> 16) & 0xFF, g = (display >> 8) & 0xFF, b = display & 0xFF;
-        button.setTextColor((r * 299 + g * 587 + b * 114) / 1000 < 128 ? 0xFFFFFFFF : 0xFF000000);
-    }
-
-    /** Spectrum background card: enable switch, shader effect presets and permissions. */
-    private void addSpectrumControls(LinearLayout parent) {
-        MaterialSwitch spectrumSwitch = toggle("在歌词悬浮窗中显示实时频谱背景",
-                "跟随系统正在播放的音乐律动，歌词仍显示在频谱之上；仅播放音乐时采集");
-        spectrumSwitch.setChecked(AppPreferences.spectrumEnabled(this));
-        spectrumSwitch.setOnCheckedChangeListener((button, checked) -> {
-            AppPreferences.setSpectrumEnabled(this, checked);
-            // Toggling adds or removes the shader layer, which changes the window's view
-            // structure — a full refresh rebuilds it.
-            changed();
-            refreshSpectrumStatus();
-        });
-        parent.addView(spectrumSwitch);
-        addSpectrumHeightControl(parent);
-        addSpectrumStyleSelector(parent);
-        spectrumStatus = text("", 12, 0xFF9EAFBF, false);
-        spectrumStatus.setLineSpacing(0f, 1.2f);
-        spectrumStatus.setPadding(0, dp(12), 0, dp(2));
-        parent.addView(spectrumStatus);
-        refreshSpectrumStatus();
-        addSpectrumPermissionRow(parent);
-    }
-
-    /** Height of the lyric + spectrum panel; a window-size change re-attaches the overlay. */
-    private void addSpectrumHeightControl(LinearLayout parent) {
-        TextView label = text("悬浮窗高度", 13, 0xFFA9B6C8, true);
-        label.setPadding(0, dp(10), 0, dp(3));
-        parent.addView(label);
-        TextView summary = text("", 12, 0xFF9EAFBF, false);
-        summary.setPadding(0, 0, 0, dp(2));
-        parent.addView(summary);
-        SeekBar bar = new SeekBar(this);
-        final int min = Math.max(88, AppPreferences.minimumPanelHeightDp(this));
-        final int max = 400;
-        bar.setMax(max - min);
-        bar.setProgress(Math.max(0, Math.min(max - min,
-                AppPreferences.panelHeightDp(this) - min)));
-        summary.setText("当前：" + (bar.getProgress() + min)
-                + "（歌词在上、频谱在下，共用这一块高度；松手生效）");
-        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seek, int progress, boolean fromUser) {
-                summary.setText("当前：" + (progress + min)
-                        + "（歌词在上、频谱在下，共用这一块高度；松手生效）");
-            }
-            @Override public void onStartTrackingTouch(SeekBar seek) { }
-            @Override public void onStopTrackingTouch(SeekBar seek) {
-                // Persist once the finger lifts: each height change re-attaches the window.
-                AppPreferences.setPanelHeightDp(MainActivity.this, seek.getProgress() + min);
-                changed();
-            }
-        });
-        parent.addView(bar);
-    }
-
-    private void addSpectrumStyleSelector(LinearLayout parent) {
-        TextView label = text("特效风格（OpenGL 着色器）", 13, 0xFFA9B6C8, true);
-        label.setPadding(0, dp(10), 0, dp(4));
-        parent.addView(label);
-        LinearLayout row = new LinearLayout(this);
-        for (int i = 0; i < SpectrumShaders.STYLE_IDS.length; i++) {
-            final String styleId = SpectrumShaders.STYLE_IDS[i];
-            MaterialButton item = button(SpectrumShaders.STYLE_LABELS[i], false);
-            item.setOnClickListener(v -> {
-                if (styleId.equals(AppPreferences.spectrumStyle(this))) return;
-                AppPreferences.setSpectrumStyle(this, styleId);
-                // Swapping shader programs means swapping the window's TextureView.
-                changed();
-                updateSpectrumStyleSelection();
-            });
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1f);
-            if (i > 0) params.leftMargin = dp(8);
-            row.addView(item, params);
+    private void resetSettingsToDefaults() {
+        String treeUri = AppPreferences.localLyricDirectoryUri(this);
+        if (!treeUri.isEmpty()) {
+            try {
+                getContentResolver().releasePersistableUriPermission(Uri.parse(treeUri),
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Throwable ignored) { }
         }
-        styleButtonRow = row;
-        parent.addView(row);
-        updateSpectrumStyleSelection();
-    }
-
-    private void updateSpectrumStyleSelection() {
-        if (styleButtonRow == null) return;
-        String current = AppPreferences.spectrumStyle(this);
-        for (int i = 0; i < SpectrumShaders.STYLE_IDS.length; i++) {
-            MaterialButton item = (MaterialButton) styleButtonRow.getChildAt(i);
-            boolean selected = SpectrumShaders.STYLE_IDS[i].equals(current);
-            item.setBackgroundTintList(ColorStateList.valueOf(selected
-                    ? themeColor(com.google.android.material.R.attr.colorPrimary, 0xFF6EE7F2)
-                    : 0xFF25364D));
-            item.setTextColor(selected
-                    ? themeColor(com.google.android.material.R.attr.colorOnPrimary, 0xFF07111F)
-                    : themeColor(com.google.android.material.R.attr.colorOnSurface, 0xFFF1F5FA));
-        }
-    }
-
-    private void refreshSpectrumStatus() {
-        if (spectrumStatus != null) spectrumStatus.setText(AudioSpectrumSource.status(this));
-    }
-
-    private void addSpectrumPermissionRow(LinearLayout parent) {
-        LinearLayout row = new LinearLayout(this);
-        boolean needRecord = Build.VERSION.SDK_INT >= 23
-                && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED;
-        if (needRecord) {
-            MaterialButton record = button("授权录音权限", true);
-            record.setOnClickListener(v -> requestPermissions(
-                    new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_RECORD_AUDIO));
-            row.addView(record, weightedButton());
-        }
-        // The playback-capture path is the reliable one on Android 10+; the consent lives until
-        // reboot, so this button doubles as the "re-authorize" entry after one.
-        if (Build.VERSION.SDK_INT >= 29) {
-            MaterialButton projection = button("授权内录（媒体投影）", !needRecord);
-            projection.setOnClickListener(v -> requestProjectionConsent());
-            LinearLayout.LayoutParams params = weightedButton();
-            if (needRecord) params.leftMargin = dp(10);
-            row.addView(projection, params);
-        }
-        if (row.getChildCount() == 0) return;
-        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, dp(48));
-        rowParams.topMargin = dp(10);
-        parent.addView(row, rowParams);
-    }
-
-    private void requestProjectionConsent() {
-        if (Build.VERSION.SDK_INT < 29) return;
-        android.media.projection.MediaProjectionManager manager =
-                (android.media.projection.MediaProjectionManager)
-                        getSystemService(MEDIA_PROJECTION_SERVICE);
-        if (manager == null) {
-            SafeToast.show(this, "此系统不支持媒体投影授权", Toast.LENGTH_LONG);
-            return;
-        }
-        try {
-            startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_PROJECTION);
-        } catch (Throwable error) {
-            SafeToast.show(this, "无法打开内录授权界面", Toast.LENGTH_LONG);
-        }
-    }
-
-    private void changed() {
-        AppPreferences.changed(this);
-        LyricsDisplayService.startOrRefresh(this);
-    }
-
-    private void openFontPicker() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("*/*");
-        if (startDocumentPicker(intent)) return;
-        Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
-        fallback.addCategory(Intent.CATEGORY_OPENABLE);
-        fallback.setType("*/*");
-        if (startDocumentPicker(fallback)) return;
-        SafeToast.show(this, "此设备没有可用的文件选择器，请安装或启用系统文件管理器后重试。",
-                Toast.LENGTH_LONG);
+        int removed = AppPreferences.resetUserSettings(this);
+        MusicStateStore.reloadLyrics(this);
+        SafeToast.show(this, "已恢复默认设置（重置 " + removed + " 项）",
+                Toast.LENGTH_SHORT);
+        recreate();
     }
 
     private void openLocalLyricDirectoryPicker() {
@@ -1310,19 +776,17 @@ public final class MainActivity extends AppCompatActivity {
         layout.addView(input);
         new MaterialAlertDialogBuilder(this)
                 .setTitle("手动填写本地歌词目录")
-                .setMessage("用于没有系统目录选择器的车机。应用只在该目录及其子目录查找匹配的 .lrc；路径不会导出到配置分享码。"
+                .setMessage("用于没有系统目录选择器的车机。应用只在该目录及其子目录查找匹配的 .lrc；路径不会离开本机。"
                         + LocalLyricClient.manualDirectoryRequirementNote(this))
                 .setView(layout)
                 .setNegativeButton("取消", null)
                 .setNeutralButton("清除", (dialog, which) -> {
-                    AppPreferences.get(this).edit()
-                            .remove(AppPreferences.KEY_LOCAL_LYRIC_DIRECTORY_PATH).apply();
+                    AppPreferences.setLocalLyricDirectoryPath(this, "");
                     MusicStateStore.reloadLyrics(this);
                 })
                 .setPositiveButton("保存", (dialog, which) -> {
                     String path = input.getText() == null ? "" : input.getText().toString().trim();
-                    AppPreferences.get(this).edit()
-                            .putString(AppPreferences.KEY_LOCAL_LYRIC_DIRECTORY_PATH, path).apply();
+                    AppPreferences.setLocalLyricDirectoryPath(this, path);
                     MusicStateStore.reloadLyrics(this);
                     if (path.isEmpty()) {
                         SafeToast.show(this, "已清除手动歌词目录", Toast.LENGTH_SHORT);
@@ -1334,16 +798,6 @@ public final class MainActivity extends AppCompatActivity {
                                 Toast.LENGTH_LONG);
                     }
                 }).show();
-    }
-
-    private boolean startDocumentPicker(Intent intent) {
-        try {
-            if (intent.resolveActivity(getPackageManager()) == null) return false;
-            startActivityForResult(intent, REQUEST_CUSTOM_FONT);
-            return true;
-        } catch (Throwable ignored) {
-            return false;
-        }
     }
 
     private TextView text(String value, int sp, int color, boolean bold) {
@@ -1364,7 +818,7 @@ public final class MainActivity extends AppCompatActivity {
                 : themeColor(com.google.android.material.R.attr.colorOnSurface, 0xFFF1F5FA));
         button.setAllCaps(false);
         button.setCornerRadius(dp(15));
-        button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(
+        button.setBackgroundTintList(ColorStateList.valueOf(
                 primary ? themeColor(com.google.android.material.R.attr.colorPrimary, 0xFF6EE7F2)
                         // Keep secondary controls neutral on the deliberately dark home page;
                         // device DynamicColors can otherwise turn them lavender.
@@ -1404,7 +858,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private int themeColor(int attribute, int fallback) {
-        TypedValue value = new TypedValue();
+        android.util.TypedValue value = new android.util.TypedValue();
         return getTheme().resolveAttribute(attribute, value, true) ? value.data : fallback;
     }
 
@@ -1421,129 +875,21 @@ public final class MainActivity extends AppCompatActivity {
                 ? themeColor(com.google.android.material.R.attr.colorOnSurface, requested) : requested;
     }
 
-    private void showConfigurationShareDialog() {
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("配置分享")
-                .setItems(new String[]{"生成分享码", "输入分享码导入"}, (dialog, which) -> {
-                    if (which == 0) promptShareConfiguration();
-                    else promptImportConfiguration();
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
-
-    private void confirmResetSettings() {
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("恢复默认设置？")
-                .setMessage("将清除当前显示布局、颜色、歌词匹配规则、启动方式、本地歌词目录和自定义字体。")
-                .setPositiveButton("恢复默认", (dialog, which) -> resetSettingsToDefaults())
-                .setNegativeButton("取消", null)
-                .show();
-    }
-
-    private void resetSettingsToDefaults() {
-        String treeUri = AppPreferences.localLyricDirectoryUri(this);
-        if (!treeUri.isEmpty()) {
-            try {
-                getContentResolver().releasePersistableUriPermission(Uri.parse(treeUri),
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } catch (Throwable ignored) { }
+    /** Scales every text control by the settings-UI scale, replacing the old font-store hook. */
+    private void applyUiScale(View view) {
+        int scale = AppPreferences.settingsUiScale(this);
+        if (scale == 100 || view == null) return;
+        float factor = scale / 100f;
+        if (view instanceof TextView) {
+            TextView textView = (TextView) view;
+            textView.setTextSize(textView.getTextSize() / getResources().getDisplayMetrics()
+                    .scaledDensity * factor);
         }
-        CustomFontStore.clear(this);
-        int removed = AppPreferences.resetUserSettings(this);
-        MusicStateStore.reloadLyrics(this);
-        AppPreferences.changed(this);
-        SafeToast.show(this, "已恢复默认设置（重置 " + removed + " 项）",
-                Toast.LENGTH_SHORT);
-        recreate();
-    }
-
-    private void promptShareConfiguration() {
-        TextInputEditText input = new TextInputEditText(this);
-        input.setHint("配置简介（可选，最多 200 字）");
-        input.setSingleLine(false);
-        input.setMaxLines(3);
-        input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(200)});
-        input.setPadding(dp(20), dp(12), dp(20), dp(12));
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("生成配置分享码")
-                .setMessage("只上传可分享的设置；不会上传歌曲、歌词、本地目录、字体文件或设备标识。")
-                .setView(input)
-                .setPositiveButton("上传", (dialog, which) -> {
-                    String description = input.getText() == null ? "" : input.getText().toString();
-                    ConfigurationShareClient.share(this, description, result -> runOnUiThread(() -> {
-                        if (!result.success) {
-                            SafeToast.show(this, "生成失败：" + result.error, Toast.LENGTH_LONG);
-                            return;
-                        }
-                        String code = result.value.optString("code");
-                        new MaterialAlertDialogBuilder(this)
-                                .setTitle("分享码已生成")
-                                .setMessage(code + "\n\n有效期至：" + result.value.optString("expiresAt"))
-                                .setPositiveButton("复制", (ignored, copyWhich) -> copyText("配置分享码", code))
-                                .setNegativeButton("完成", null)
-                                .show();
-                    }));
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
-
-    private void promptImportConfiguration() {
-        TextInputEditText input = new TextInputEditText(this);
-        input.setHint("8 位分享码");
-        input.setSingleLine(true);
-        input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(12)});
-        input.setPadding(dp(20), dp(12), dp(20), dp(12));
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("导入配置")
-                .setView(input)
-                .setPositiveButton("查看", (dialog, which) -> {
-                    String code = input.getText() == null ? "" : input.getText().toString();
-                    ConfigurationShareClient.fetch(code, result -> runOnUiThread(() -> {
-                        if (!result.success) {
-                            SafeToast.show(this, "读取失败：" + result.error, Toast.LENGTH_LONG);
-                            return;
-                        }
-                        String description = result.value.optString("description", "未填写简介");
-                        if (description.trim().isEmpty()) description = "未填写简介";
-                        String finalDescription = description;
-                        new MaterialAlertDialogBuilder(this)
-                                .setTitle("确认导入 " + result.value.optString("code"))
-                                .setMessage("配置简介：\n" + finalDescription
-                                        + "\n\n导入会覆盖分享码中包含的设置，本机私密数据不受影响。")
-                                .setPositiveButton("导入", (ignored, importWhich) -> {
-                                    try {
-                                        int count = ConfigurationCodec.importConfiguration(this,
-                                                result.value.getJSONObject("config"));
-                                        AppPreferences.changed(this);
-                                        LyricsDisplayService.startOrRefresh(this);
-                                        SafeToast.show(this, "已导入 " + count + " 项设置",
-                                                Toast.LENGTH_SHORT);
-                                        recreate();
-                                    } catch (Throwable error) {
-                                        SafeToast.show(this, "导入失败：" + error.getMessage(),
-                                                Toast.LENGTH_LONG);
-                                    }
-                                })
-                                .setNegativeButton("取消", null)
-                                .show();
-                    }));
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
-
-    private void copyText(String label, String value) {
-        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText(label, value));
-        SafeToast.show(this, "已复制", Toast.LENGTH_SHORT);
-    }
-
-    private void openUrl(String address) {
-        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(address))); }
-        catch (Throwable error) {
-            SafeToast.show(this, "无法打开链接：" + address, Toast.LENGTH_LONG);
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int index = 0; index < group.getChildCount(); index++) {
+                applyUiScale(group.getChildAt(index));
+            }
         }
     }
 
@@ -1557,10 +903,6 @@ public final class MainActivity extends AppCompatActivity {
             if (expected.equals(ComponentName.unflattenFromString(entry))) return true;
         }
         return false;
-    }
-
-    private boolean canDrawOverlays() {
-        return Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this);
     }
 
     private void openNotificationAccess() {
@@ -1578,7 +920,7 @@ public final class MainActivity extends AppCompatActivity {
                 PERMISSION_CHECK_NOTIFICATION)) return;
         if (startPermissionSettingsActivity(new Intent(Settings.ACTION_SETTINGS),
                 PERMISSION_CHECK_NOTIFICATION)) return;
-        SafeToast.show(this, "\u65e0\u6cd5\u6253\u5f00\u7cfb\u7edf\u7684\u901a\u77e5\u8bfb\u53d6\u8bbe\u7f6e\uff0c\u8bf7\u5728\u7cfb\u7edf\u8bbe\u7f6e\u4e2d\u624b\u52a8\u5f00\u542f\u3002",
+        SafeToast.show(this, "无法打开系统的通知读取设置，请在系统设置中手动开启。",
                 Toast.LENGTH_LONG);
     }
 
@@ -1594,35 +936,23 @@ public final class MainActivity extends AppCompatActivity {
 
     private boolean startPermissionSettingsActivity(Intent intent, int permissionType) {
         if (!startSettingsActivity(intent)) return false;
-        pendingPermissionFaqCheck |= permissionType;
+        pendingPermissionCheck |= permissionType;
         return true;
     }
 
-    private void promptPermissionFaqIfStillMissing() {
-        if (pendingPermissionFaqCheck == 0 || permissionFaqDialogVisible || isFinishing()) return;
-        int pending = pendingPermissionFaqCheck;
-        pendingPermissionFaqCheck = 0;
+    private void promptPermissionIfStillMissing() {
+        if (pendingPermissionCheck == 0 || permissionDialogVisible || isFinishing()) return;
+        int pending = pendingPermissionCheck;
+        pendingPermissionCheck = 0;
         boolean notificationMissing = (pending & PERMISSION_CHECK_NOTIFICATION) != 0
                 && !hasNotificationAccess();
-        boolean overlayMissing = (pending & PERMISSION_CHECK_OVERLAY) != 0
-                && !canDrawOverlays();
-        if (!notificationMissing && !overlayMissing) return;
-
-        String missing;
-        if (notificationMissing && overlayMissing) {
-            missing = "音乐读取权限和悬浮窗权限";
-        } else if (notificationMissing) {
-            missing = "音乐读取权限";
-        } else {
-            missing = "悬浮窗权限";
-        }
-        permissionFaqDialogVisible = true;
+        if (!notificationMissing) return;
+        permissionDialogVisible = true;
         new MaterialAlertDialogBuilder(this)
                 .setTitle("权限仍未生效")
-                .setMessage("检测到“" + missing + "”仍未授权。不同系统可能将开关放在额外的安全、通知或应用管理页面，可在常见问题中查看对应解决方法。")
-                .setNegativeButton("稍后", null)
-                .setPositiveButton("查看常见问题", (dialog, which) -> showFaqPanel())
-                .setOnDismissListener(dialog -> permissionFaqDialogVisible = false)
+                .setMessage("检测到“音乐读取权限”仍未授权。不同系统可能将开关放在额外的安全、通知或应用管理页面，请在系统设置中找到“通知使用权”并允许本应用。")
+                .setPositiveButton("知道了", (dialog, which) -> { })
+                .setOnDismissListener(dialog -> permissionDialogVisible = false)
                 .show();
     }
 
@@ -1661,36 +991,8 @@ public final class MainActivity extends AppCompatActivity {
         return ageMs / 1_000L + " 秒前";
     }
 
-    private void openOverlayPermission() {
-        if (Build.VERSION.SDK_INT < 23) {
-            if (!startPermissionSettingsActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.parse("package:" + getPackageName())), PERMISSION_CHECK_OVERLAY)) {
-                SafeToast.show(this, "无法打开系统应用设置，请在系统设置中手动开启悬浮窗权限。",
-                        Toast.LENGTH_LONG);
-            }
-            return;
-        }
-        Intent intent = new Intent("android.settings.action.MANAGE_OVERLAY_PERMISSION",
-                Uri.parse("package:" + getPackageName()));
-        if (startPermissionSettingsActivity(intent, PERMISSION_CHECK_OVERLAY)) return;
-        if (startPermissionSettingsActivity(
-                new Intent("android.settings.action.MANAGE_OVERLAY_PERMISSION"), PERMISSION_CHECK_OVERLAY)) {
-            return;
-        }
-        if (startPermissionSettingsActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:" + getPackageName())), PERMISSION_CHECK_OVERLAY)) {
-            return;
-        }
-        SafeToast.show(this, "无法打开系统悬浮窗权限设置，请在系统设置中手动开启。", Toast.LENGTH_LONG);
-    }
-
     private static String permissionState(boolean granted) {
         return granted ? "已授权" : "未授权";
-    }
-
-    private void showPermissionHomeHint(String permission) {
-        SafeToast.show(this, "请在首页“使用权限”中授予" + permission + "权限",
-                Toast.LENGTH_LONG);
     }
 
     private void requestPostNotificationPermission() {
@@ -1704,28 +1006,6 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
-    }
-
-    private void openUsageAccessSettings() {
-        if (Build.VERSION.SDK_INT < 21) {
-            SafeToast.show(this, "当前系统无需使用情况访问权限", Toast.LENGTH_SHORT);
-            return;
-        }
-        Intent direct = new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS,
-                Uri.parse("package:" + getPackageName()));
-        if (startSettingsActivity(direct)) return;
-        if (startSettingsActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))) return;
-        openApplicationDetails();
-    }
-
-    private void openDefaultAppsSettings() {
-        if (startSettingsActivity(new Intent("android.settings.MANAGE_DEFAULT_APPS_SETTINGS"))) {
-            return;
-        }
-        if (!startSettingsActivity(new Intent(Settings.ACTION_SETTINGS))) {
-            SafeToast.show(this, "无法打开默认应用设置，请在系统设置中手动进入。",
-                    Toast.LENGTH_LONG);
-        }
     }
 
     private void openApplicationDetails() {

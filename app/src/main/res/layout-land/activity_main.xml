@@ -31,17 +31,7 @@
             android:layout_marginTop="8dp"
             android:insetTop="0dp"
             android:insetBottom="0dp"
-            android:text="总览"
-            android:textAllCaps="false" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/nav_display"
-            android:layout_width="match_parent"
-            android:layout_height="58dp"
-            android:layout_marginTop="5dp"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:text="显示"
+            android:text="状态"
             android:textAllCaps="false" />
 
         <com.google.android.material.button.MaterialButton
@@ -52,16 +42,6 @@
             android:insetTop="0dp"
             android:insetBottom="0dp"
             android:text="歌词"
-            android:textAllCaps="false" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/nav_system"
-            android:layout_width="match_parent"
-            android:layout_height="58dp"
-            android:layout_marginTop="5dp"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:text="高级"
             android:textAllCaps="false" />
     </LinearLayout>
 
@@ -92,7 +72,7 @@
                 android:id="@+id/main_eyebrow"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="LYRICS · COMPANION"
+                android:text="WEMEW · LRC SYNC"
                 android:textColor="#6EE7F2"
                 android:textSize="11sp"
                 android:textStyle="bold" />
