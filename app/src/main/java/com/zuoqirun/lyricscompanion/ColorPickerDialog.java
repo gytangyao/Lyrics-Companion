@@ -18,10 +18,15 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 
 import java.util.Locale;
-import java.util.function.IntConsumer;
 
 /** HSV palette: a saturation/value square picked with the finger plus a hue strip. */
 final class ColorPickerDialog {
+
+    /** Delivered the picked colour; local interface because java.util.function needs API 24. */
+    interface OnColorPicked {
+        void onPicked(int color);
+    }
+
 
     private final LinearLayout root;
     private final SaturationValueSquare square;
@@ -96,13 +101,13 @@ final class ColorPickerDialog {
         updateColor();
     }
 
-    static void show(Context context, int initialColor, IntConsumer onPicked) {
+    static void show(Context context, int initialColor, OnColorPicked onPicked) {
         ColorPickerDialog picker = new ColorPickerDialog(context,
                 initialColor == 0 ? 0xFFFFFFFF : initialColor);
         new AlertDialog.Builder(context)
                 .setTitle("选择歌词颜色")
                 .setView(picker.root)
-                .setPositiveButton("确定", (d, which) -> onPicked.accept(picker.color()))
+                .setPositiveButton("确定", (d, which) -> onPicked.onPicked(picker.color()))
                 .setNegativeButton("取消", null)
                 .show();
     }

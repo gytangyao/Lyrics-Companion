@@ -58,6 +58,9 @@ public final class LyricsDisplayService extends Service implements DisplayManage
             "com.zuoqirun.lyricscompanion.action.SECONDARY_POSITION";
     private static final String ACTION_REFRESH_SECONDARY =
             "com.zuoqirun.lyricscompanion.action.REFRESH_SECONDARY";
+    /** Reloads spectrum style/palette on the attached panels without rebuilding any window. */
+    private static final String ACTION_SPECTRUM_REFRESH =
+            "com.zuoqirun.lyricscompanion.action.SPECTRUM_REFRESH";
     private static final String ACTION_SETTINGS_VISIBILITY =
             "com.zuoqirun.lyricscompanion.action.SETTINGS_VISIBILITY";
     private static final String EXTRA_VISIBLE = "visible";
@@ -168,6 +171,16 @@ public final class LyricsDisplayService extends Service implements DisplayManage
     static void refreshSecondary(Context context) {
         startCommand(context, new Intent(context, LyricsDisplayService.class)
                 .setAction(ACTION_REFRESH_SECONDARY));
+    }
+
+    /**
+     * Applies a spectrum setting (enable/style/palette) live: reloads the attached panels and
+     * re-runs the capture decision. Deliberately does not go through
+     * {@link AppPreferences#changed}, which would tear down and re-attach every overlay window.
+     */
+    static void refreshSpectrum(Context context) {
+        startCommand(context, new Intent(context, LyricsDisplayService.class)
+                .setAction(ACTION_SPECTRUM_REFRESH));
     }
 
     static boolean startRememberedFromLauncher(Context context) {
@@ -281,6 +294,15 @@ public final class LyricsDisplayService extends Service implements DisplayManage
             rebuildSecondary();
             return START_STICKY;
         }
+        if (ACTION_SPECTRUM_REFRESH.equals(action)) {
+            if (mainPanel != null) mainPanel.reloadStyle();
+            if (secondaryPanel != null) secondaryPanel.reloadStyle();
+            for (ExtraOverlay extra : extraOverlays) {
+                if (extra.panel != null) extra.panel.reloadStyle();
+            }
+            AudioSpectrumSource.sync(this);
+            return START_STICKY;
+        }
         if (ACTION_SETTINGS_VISIBILITY.equals(action)) {
             settingsVisible = intent.getBooleanExtra(EXTRA_VISIBLE, false);
             if (settingsVisible) dismissMain();
@@ -308,6 +330,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         dismissSecondary();
         dismissExtras();
         dismissStatusLyricStrip();
+        AudioSpectrumSource.release();
         super.onDestroy();
     }
 
@@ -371,6 +394,7 @@ public final class LyricsDisplayService extends Service implements DisplayManage
         if (!secondaryHiddenForPlayback) rebuildExtras();
         if (!overlaysHiddenForPlayback && AppPreferences.topLyricStrip(this)) showStatusLyricStrip();
         else dismissStatusLyricStrip();
+        AudioSpectrumSource.sync(this);
     }
 
     private void rebuildSecondary() {

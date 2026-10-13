@@ -29,13 +29,24 @@ public final class SpectrumMathTest {
         assertTrue("empty low-frequency display bands inherit nearby FFT energy", levels[0] > 0f);
     }
 
-    @Test public void barsFallSmoothlyAndAcceptANewPeakImmediately() {
-        SpectrumMath.BarTracker tracker = new SpectrumMath.BarTracker(1);
-        tracker.update(new float[]{1f}, 1_000L);
-        tracker.update(new float[]{0f}, 1_100L);
+    @Test public void linearMagnitudesLandInTheirBandAndFillEmptyNeighbours() {
+        // Folded FFT output: entry i covers i * 44100 / 512 Hz. Entry 1 (about 86 Hz) is the
+        // lowest populated point, so the display bands beneath it must inherit its energy —
+        // mirroring what the byte path does with its first usable FFT point.
+        float[] linear = new float[256];
+        linear[1] = 0.8f;
+        float[] levels = new SpectrumMath.Analyzer().processLinear(linear, 44_100f);
+        int expected = SpectrumMath.bandForFrequency(44_100f / 512f, 44_100f);
 
-        assertTrue(tracker.barAt(0) > 0f && tracker.barAt(0) < 1f);
-        tracker.update(new float[]{0.95f}, 1_120L);
-        assertEquals(0.95f, tracker.barAt(0), 0.0001f);
+        assertTrue(levels[expected] > 0f);
+        assertTrue("empty low-frequency display bands inherit nearby energy", levels[0] > 0f);
+    }
+
+    @Test public void silenceDetectionMatchesTheWatchdogThreshold() {
+        assertTrue(SpectrumMath.isSilent(new float[SpectrumMath.BAND_COUNT]));
+        assertTrue(SpectrumMath.isSilent(null));
+        float[] levels = new float[SpectrumMath.BAND_COUNT];
+        levels[7] = 0.005f;
+        assertTrue(!SpectrumMath.isSilent(levels));
     }
 }

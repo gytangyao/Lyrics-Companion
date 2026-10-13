@@ -2,11 +2,14 @@ package com.zuoqirun.lyricscompanion;
 
 import android.content.Context;
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.SystemClock;
 import android.util.LruCache;
@@ -63,6 +66,11 @@ final class LyricsPanelView extends View {
     private long compactMarqueeElapsedMs;
     private long compactMarqueeLastFrameMs;
     private boolean compactMarqueeActive;
+    /** Spectrum background on: top-aligned lyrics, square clip and a readability veil. */
+    private boolean spectrumOn;
+    private boolean spectrumAcquired;
+    private LinearGradient spectrumVeilShader;
+    private final RectF spectrumFrameRect = new RectF();
     private final boolean fullscreen;
     private final boolean compactTextOnly;
     private final boolean secondary;
@@ -138,8 +146,20 @@ final class LyricsPanelView extends View {
         refinedLyricFontSize = AppPreferences.refinedLyricFontSize(getContext(), secondary);
         refinedLyricGlow = AppPreferences.refinedLyricGlow(getContext(), secondary);
         customTypeface = CustomFontStore.load(getContext());
+        // The shader layer renders beneath this view; the panel only owns the veil and layout.
+        spectrumOn = !compactTextOnly && AppPreferences.spectrumEnabled(getContext());
+        syncSpectrumRenderer();
         clearTextCaches();
         invalidate();
+    }
+
+    /** Keeps the shared GL stream alive exactly while this attached panel shows the spectrum. */
+    private void syncSpectrumRenderer() {
+        boolean want = spectrumOn && isAttachedToWindow();
+        if (want == spectrumAcquired) return;
+        spectrumAcquired = want;
+        if (want) SpectrumGlRenderer.acquire(getContext());
+        else SpectrumGlRenderer.release();
     }
 
     @Override protected void onDraw(Canvas canvas) {
@@ -157,7 +177,10 @@ final class LyricsPanelView extends View {
         refreshScheduledTheme(now);
         canvas.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR);
         drawCompact(canvas, snapshot, density);
-        scheduleNextFrame(nextFrameDelay(snapshot, now));
+        long delay = nextFrameDelay(snapshot, now);
+        // The GL effect animates independently; keep the panel redrawing while it streams.
+        if (spectrumOn && SpectrumGlRenderer.frame() != null) delay = Math.min(delay, 33L);
+        scheduleNextFrame(delay);
     }
 
     private void scheduleNextFrame(long delayMs) {
@@ -206,10 +229,14 @@ final class LyricsPanelView extends View {
         int primaryText = light ? 0xFF000000 : 0xFFFFFFFF;
 
         int save = canvas.save();
-        float radius = Math.min(width, height) * panelCornerRadiusRatio(0.18f);
+        // With the spectrum background on, the panel reads as a display band: square corners
+        // and no inset ring, instead of the standalone lyric bubble's rounded look.
+        float radius = spectrumOn ? 0f
+                : Math.min(width, height) * panelCornerRadiusRatio(0.18f);
         clipPath.reset();
         clipPath.addRoundRect(panelRect, radius, radius, Path.Direction.CW);
         canvas.clipPath(clipPath);
+        drawSpectrumVeil(canvas, width, height);
         float referenceArea = 320f * 104f * density * density;
         float responsiveScale = compactTextOnly
                 ? (float) Math.sqrt(Math.max(0.01f, height / (104f * density)))
@@ -245,7 +272,9 @@ final class LyricsPanelView extends View {
                 ? originalDescent - originalAscent + lineGap
                 + secondaryDescent - secondaryAscent
                 : originalDescent - originalAscent;
-        float groupTop = lyricTop + Math.max(0f, (lyricStageHeight - groupHeight) * 0.5f);
+        // Lyrics stay at the top when the spectrum fills the panel below; centred otherwise.
+        float groupTop = lyricTop + (spectrumOn ? 0f
+                : Math.max(0f, (lyricStageHeight - groupHeight) * 0.5f));
         float baseline = groupTop - originalAscent;
         float secondaryBaseline = baseline + originalDescent + lineGap - secondaryAscent;
         String secondaryText = showSecondaryLine ? (showNextLine
@@ -645,14 +674,48 @@ final class LyricsPanelView extends View {
         ellipsizedTextCache.evictAll();
     }
 
+    @Override protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        syncSpectrumRenderer();
+    }
+
     @Override protected void onDetachedFromWindow() {
+        syncSpectrumRenderer();
         clearTextCaches();
         super.onDetachedFromWindow();
     }
 
     @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
-        if (width != oldWidth || height != oldHeight) clearTextCaches();
+        if (width != oldWidth || height != oldHeight) {
+            clearTextCaches();
+            spectrumVeilShader = null;
+        }
         super.onSizeChanged(width, height, oldWidth, oldHeight);
+    }
+
+    /**
+     * The GL effect frame, drawn stretched over the panel's lower band, with the top-weighted
+     * readability veil on top of it (the lyric text follows in the caller).
+     */
+    private void drawSpectrumVeil(Canvas canvas, float width, float height) {
+        if (!spectrumOn) return;
+        Bitmap frame = SpectrumGlRenderer.frame();
+        if (frame != null && !frame.isRecycled()) {
+            spectrumFrameRect.set(0f, 0f, width, height);
+            paint.setAlpha(255);
+            paint.setFilterBitmap(true);
+            canvas.drawBitmap(frame, null, spectrumFrameRect, paint);
+        }
+        if (!AudioSpectrumSource.latestFrame().live) return;
+        if (spectrumVeilShader == null) {
+            spectrumVeilShader = new LinearGradient(0f, 0f, 0f, height,
+                    new int[]{0x660B0F16, 0x5A0B0F16, 0x1E0B0F16, 0x000B0F16},
+                    new float[]{0f, 0.10f, 0.36f, 0.62f}, Shader.TileMode.CLAMP);
+        }
+        paint.setShader(spectrumVeilShader);
+        paint.setAlpha(255);
+        canvas.drawRect(0f, 0f, width, height, paint);
+        paint.setShader(null);
     }
 
     private static final class TextLayoutKey {

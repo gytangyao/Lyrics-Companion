@@ -1256,26 +1256,33 @@ final class AppPreferences {
                 color == 0 ? 0 : (color | 0xFF000000));
     }
 
-    static boolean spectrumEnabled(Context context, boolean secondary) {
-        String style = overlayStyle(context, secondary);
-        boolean legacy = "compact".equals(style) && compactShowBars(context, secondary);
-        return displayBoolean(context, secondary, KEY_SPECTRUM_ENABLED, legacy);
+    /**
+     * The spectrum background is a global toggle: the main panel, the secondary display and
+     * the extra screens all share one capture engine, so scoping the key per display would
+     * leave the feature dead everywhere but the screen that has settings UI.
+     */
+    static boolean spectrumEnabled(Context context) {
+        return get(context).getBoolean(KEY_SPECTRUM_ENABLED, false);
     }
 
-    static String spectrumStyle(Context context, boolean secondary) {
-        String value = displayString(context, secondary, KEY_SPECTRUM_STYLE, "bars");
-        return "mirror".equals(value) || "capsule".equals(value)
-                || "dots".equals(value) || "wave".equals(value) ? value : "bars";
+    static void setSpectrumEnabled(Context context, boolean enabled) {
+        get(context).edit().putBoolean(KEY_SPECTRUM_ENABLED, enabled).apply();
     }
 
-    static String spectrumColorMode(Context context, boolean secondary) {
-        String value = displayString(context, secondary, KEY_SPECTRUM_COLOR_MODE, "lyric");
-        return "custom".equals(value) || "rainbow".equals(value)
-                || "artwork".equals(value) ? value : "lyric";
+    /** One of the shader effect ids; legacy canvas ids (bars/wave/ripple…) collapse to neon. */
+    static String spectrumStyle(Context context) {
+        String value = get(context).getString(KEY_SPECTRUM_STYLE, "neon");
+        return SpectrumShaders.isShaderStyle(value) ? value : "neon";
+    }
+
+    static void setSpectrumStyle(Context context, String style) {
+        get(context).edit().putString(KEY_SPECTRUM_STYLE, style).apply();
     }
 
     static String realSpectrumCaptureRate(Context context) {
-        String value = get(context).getString(KEY_REAL_SPECTRUM_CAPTURE_RATE, "low");
+        // High is the default: the extra capture cost is trivial next to the visual gain, and
+        // weak old head units simply drop frames rather than misbehave.
+        String value = get(context).getString(KEY_REAL_SPECTRUM_CAPTURE_RATE, "high");
         return "high".equals(value) ? "high" : "low";
     }
 

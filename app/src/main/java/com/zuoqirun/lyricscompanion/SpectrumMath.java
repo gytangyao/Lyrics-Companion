@@ -44,6 +44,34 @@ final class SpectrumMath {
             for (int i = 0; i < BAND_COUNT; i++) {
                 if (counts[i] > 0) magnitudes[i] = (float) Math.sqrt(sums[i] / counts[i]);
             }
+            return finalizeBands();
+        }
+
+        /**
+         * Folds linear FFT magnitudes into the logarithmic display bands by per-band peak.
+         * Entry {@code i} of a size-N FFT output covers {@code i * sampleRateHz / N} Hz, which
+         * holds both for one-entry-per-bin arrays and for audio_flux-style folded groups
+         * ({@link SpectrumFft#magnitudes}).
+         */
+        float[] processLinear(float[] linearMagnitudes, float sampleRateHz) {
+            java.util.Arrays.fill(counts, 0);
+            java.util.Arrays.fill(magnitudes, 0f);
+            if (linearMagnitudes == null || linearMagnitudes.length < 2 || sampleRateHz <= 0f) {
+                return new float[BAND_COUNT];
+            }
+            for (int bin = 1; bin < linearMagnitudes.length; bin++) {
+                int band = bandForFrequency(
+                        bin * sampleRateHz / (2f * linearMagnitudes.length), sampleRateHz);
+                if (band < 0) continue;
+                counts[band]++;
+                if (linearMagnitudes[bin] > magnitudes[band]) {
+                    magnitudes[band] = linearMagnitudes[bin];
+                }
+            }
+            return finalizeBands();
+        }
+
+        private float[] finalizeBands() {
             // The low end of a small FFT can have fewer bins than our logarithmic display
             // bands (for example, 44.1 kHz / 1024 first jumps from 43 Hz to 86 Hz). Fill
             // those display-only gaps from their closest sampled neighbours so the left edge
@@ -58,12 +86,14 @@ final class SpectrumMath {
                 return smoothed.clone();
             }
             referenceLevel = strongest >= referenceLevel
-                    ? strongest : Math.max(strongest, referenceLevel * 0.94f);
+                    ? strongest : Math.max(strongest, referenceLevel * 0.96f);
             float intensity = clamp((float) (Math.log1p(strongest * 8f) / Math.log1p(4f)));
             for (int i = 0; i < BAND_COUNT; i++) {
                 float desired = clamp((float) Math.sqrt(magnitudes[i]
                         / Math.max(0.012f, referenceLevel)) * intensity);
-                float smoothing = desired >= smoothed[i] ? 0.72f : 0.24f;
+                // Rise fast so beats hit immediately; fall a bit quicker than before so the
+                // bars read as "locked to the music" rather than drifting behind it.
+                float smoothing = desired >= smoothed[i] ? 0.82f : 0.20f;
                 smoothed[i] += (desired - smoothed[i]) * smoothing;
             }
             return smoothed.clone();
@@ -92,39 +122,13 @@ final class SpectrumMath {
         }
     }
 
-    static final class BarTracker {
-        private final float[] bars;
-        private long lastUpdateElapsedMs = -1L;
-
-        BarTracker(int count) {
-            bars = new float[count];
+    /** True when every level sits at the noise floor; the capture watchdog's silence test. */
+    static boolean isSilent(float[] levels) {
+        if (levels == null) return true;
+        for (float level : levels) {
+            if (level > 0.004f) return false;
         }
-
-        void update(float[] targets, long nowElapsedMs) {
-            float elapsedSeconds = lastUpdateElapsedMs < 0L ? 1f / 60f
-                    : Math.max(1f / 120f, Math.min(0.25f,
-                    (nowElapsedMs - lastUpdateElapsedMs) / 1000f));
-            lastUpdateElapsedMs = nowElapsedMs;
-            for (int i = 0; i < bars.length; i++) {
-                float target = targets != null && i < targets.length ? clamp(targets[i]) : 0f;
-                bars[i] = target >= bars[i] ? target
-                        : Math.max(target, bars[i] - 3.8f * elapsedSeconds);
-            }
-        }
-
-        float barAt(int index) { return bars[index]; }
-
-        boolean hasVisibleBar() {
-            for (float bar : bars) if (bar > 0.012f) return true;
-            return false;
-        }
-
-        void reset() {
-            for (int i = 0; i < bars.length; i++) {
-                bars[i] = 0f;
-            }
-            lastUpdateElapsedMs = -1L;
-        }
+        return true;
     }
 
     static float clamp(float value) {

@@ -4,8 +4,12 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Spectrum background: both capture paths (Visualizer system mix and MediaProjection
+         playback capture) gate on RECORD_AUDIO at runtime. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- A manually entered lyric directory is read as a raw path: Android 6..10 needs this
@@ -19,6 +23,8 @@
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.GET_TASKS" android:maxSdkVersion="20" />
+    <!-- Spectrum shader layer; not required so devices without a usable GPU still install. -->
+    <uses-feature android:glEsVersion="0x00020000" android:required="false" />
 
     <queries>
         <intent>
@@ -90,6 +96,13 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Persistent lyrics overlay and secondary-display rendering" />
         </service>
+
+        <!-- Playback-capture foreground service for the spectrum background; only started on
+             Android 10+ after the user granted the MediaProjection consent. -->
+        <service
+            android:name=".SpectrumCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
 
         <receiver
             android:name=".OverlayStartupReceiver"

@@ -57,6 +57,8 @@ public final class MainActivity extends AppCompatActivity {
     private static final int REQUEST_CUSTOM_FONT = 2417;
     private static final int REQUEST_LOCAL_LYRIC_DIRECTORY = 2419;
     private static final int REQUEST_LOCAL_LYRIC_STORAGE = 2421;
+    private static final int REQUEST_RECORD_AUDIO = 2423;
+    private static final int REQUEST_PROJECTION = 2425;
     private static final String STATE_SELECTED_SECTION = "selected_section";
     private static final int LYRIC_FONT_SIZE_MIN_DP = 16;
     private static final int LYRIC_FONT_SIZE_MAX_DP = 48;
@@ -88,6 +90,8 @@ public final class MainActivity extends AppCompatActivity {
     private TextView lyricFontSizeSummary;
     private MaterialButton baseColorButton;
     private MaterialButton currentColorButton;
+    private TextView spectrumStatus;
+    private LinearLayout styleButtonRow;
     private TextView sectionHeading;
     private TextView sectionDescription;
     private ScrollView mainScroll;
@@ -221,6 +225,17 @@ public final class MainActivity extends AppCompatActivity {
                     AppPreferences.KEY_LOCAL_LYRIC_DIRECTORY_URI, uri.toString()).apply();
             MusicStateStore.reloadLyrics(this);
             SafeToast.show(this, "已授权本地歌词目录", Toast.LENGTH_SHORT);
+            return;
+        }
+        if (requestCode == REQUEST_PROJECTION) {
+            if (resultCode == RESULT_OK && data != null) {
+                ProjectionTokenStore.store(resultCode, data);
+                SafeToast.show(this, "内录授权成功，开始播放音乐即可看到频谱", Toast.LENGTH_SHORT);
+            } else {
+                SafeToast.show(this, "未授权内录，将优先尝试系统混音采集", Toast.LENGTH_SHORT);
+            }
+            LyricsDisplayService.refreshSpectrum(this);
+            refreshSpectrumStatus();
             return;
         }
         if (requestCode != REQUEST_CUSTOM_FONT || resultCode != RESULT_OK || data == null) return;
@@ -398,6 +413,10 @@ public final class MainActivity extends AppCompatActivity {
         addFloatingFontSizeControl(appearanceCard);
         addFloatingColorControls(appearanceCard);
 
+        LinearLayout spectrumCard = card();
+        spectrumCard.addView(sectionLabel("频谱背景"));
+        addSpectrumControls(spectrumCard);
+
         LinearLayout resetCard = card();
         resetCard.addView(sectionLabel("数据与重置"));
         TextView resetSummary = text(
@@ -433,6 +452,7 @@ public final class MainActivity extends AppCompatActivity {
 
         LinearLayout displayPage = sectionPage();
         displayPage.addView(appearanceCard, cardMargins());
+        displayPage.addView(spectrumCard, cardMargins());
 
         LinearLayout lyricsPage = sectionPage();
         lyricsPage.addView(lyricCard, cardMargins());
@@ -713,6 +733,13 @@ public final class MainActivity extends AppCompatActivity {
             LyricsDisplayService.startOrRefresh(this);
             refreshPreview();
             refreshStatus();
+        } else if (requestCode == REQUEST_RECORD_AUDIO) {
+            boolean granted = grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            SafeToast.show(this, granted ? "录音权限已授权" : "未授权录音权限，频谱无法采集",
+                    Toast.LENGTH_SHORT);
+            LyricsDisplayService.refreshSpectrum(this);
+            refreshSpectrumStatus();
         } else if (requestCode == REQUEST_LOCAL_LYRIC_STORAGE) {
             SafeToast.show(this, LocalLyricClient.canReadManualDirectory(this)
                     ? "已授予存储读取权限，正在重新读取本地歌词"
@@ -748,6 +775,7 @@ public final class MainActivity extends AppCompatActivity {
                 + "\n最近成功读取会话：" + formatSessionReadAge(lastRead)
                 + "    当前会话数量：" + MusicNotificationListener.getLastSessionCount()
                 + "\n最近异常信息：" + error);
+        refreshSpectrumStatus();
     }
 
     /** Enlarges controls on low-density automotive screens without affecting lyric typography. */
@@ -1090,6 +1118,145 @@ public final class MainActivity extends AppCompatActivity {
         button.setBackgroundColor(display);
         int r = (display >> 16) & 0xFF, g = (display >> 8) & 0xFF, b = display & 0xFF;
         button.setTextColor((r * 299 + g * 587 + b * 114) / 1000 < 128 ? 0xFFFFFFFF : 0xFF000000);
+    }
+
+    /** Spectrum background card: enable switch, shader effect presets and permissions. */
+    private void addSpectrumControls(LinearLayout parent) {
+        MaterialSwitch spectrumSwitch = toggle("在歌词悬浮窗中显示实时频谱背景",
+                "跟随系统正在播放的音乐律动，歌词仍显示在频谱之上；仅播放音乐时采集");
+        spectrumSwitch.setChecked(AppPreferences.spectrumEnabled(this));
+        spectrumSwitch.setOnCheckedChangeListener((button, checked) -> {
+            AppPreferences.setSpectrumEnabled(this, checked);
+            // Toggling adds or removes the shader layer, which changes the window's view
+            // structure — a full refresh rebuilds it.
+            changed();
+            refreshSpectrumStatus();
+        });
+        parent.addView(spectrumSwitch);
+        addSpectrumHeightControl(parent);
+        addSpectrumStyleSelector(parent);
+        spectrumStatus = text("", 12, 0xFF9EAFBF, false);
+        spectrumStatus.setLineSpacing(0f, 1.2f);
+        spectrumStatus.setPadding(0, dp(12), 0, dp(2));
+        parent.addView(spectrumStatus);
+        refreshSpectrumStatus();
+        addSpectrumPermissionRow(parent);
+    }
+
+    /** Height of the lyric + spectrum panel; a window-size change re-attaches the overlay. */
+    private void addSpectrumHeightControl(LinearLayout parent) {
+        TextView label = text("悬浮窗高度", 13, 0xFFA9B6C8, true);
+        label.setPadding(0, dp(10), 0, dp(3));
+        parent.addView(label);
+        TextView summary = text("", 12, 0xFF9EAFBF, false);
+        summary.setPadding(0, 0, 0, dp(2));
+        parent.addView(summary);
+        SeekBar bar = new SeekBar(this);
+        final int min = Math.max(88, AppPreferences.minimumPanelHeightDp(this));
+        final int max = 400;
+        bar.setMax(max - min);
+        bar.setProgress(Math.max(0, Math.min(max - min,
+                AppPreferences.panelHeightDp(this) - min)));
+        summary.setText("当前：" + (bar.getProgress() + min)
+                + "（歌词在上、频谱在下，共用这一块高度；松手生效）");
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seek, int progress, boolean fromUser) {
+                summary.setText("当前：" + (progress + min)
+                        + "（歌词在上、频谱在下，共用这一块高度；松手生效）");
+            }
+            @Override public void onStartTrackingTouch(SeekBar seek) { }
+            @Override public void onStopTrackingTouch(SeekBar seek) {
+                // Persist once the finger lifts: each height change re-attaches the window.
+                AppPreferences.setPanelHeightDp(MainActivity.this, seek.getProgress() + min);
+                changed();
+            }
+        });
+        parent.addView(bar);
+    }
+
+    private void addSpectrumStyleSelector(LinearLayout parent) {
+        TextView label = text("特效风格（OpenGL 着色器）", 13, 0xFFA9B6C8, true);
+        label.setPadding(0, dp(10), 0, dp(4));
+        parent.addView(label);
+        LinearLayout row = new LinearLayout(this);
+        for (int i = 0; i < SpectrumShaders.STYLE_IDS.length; i++) {
+            final String styleId = SpectrumShaders.STYLE_IDS[i];
+            MaterialButton item = button(SpectrumShaders.STYLE_LABELS[i], false);
+            item.setOnClickListener(v -> {
+                if (styleId.equals(AppPreferences.spectrumStyle(this))) return;
+                AppPreferences.setSpectrumStyle(this, styleId);
+                // Swapping shader programs means swapping the window's TextureView.
+                changed();
+                updateSpectrumStyleSelection();
+            });
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1f);
+            if (i > 0) params.leftMargin = dp(8);
+            row.addView(item, params);
+        }
+        styleButtonRow = row;
+        parent.addView(row);
+        updateSpectrumStyleSelection();
+    }
+
+    private void updateSpectrumStyleSelection() {
+        if (styleButtonRow == null) return;
+        String current = AppPreferences.spectrumStyle(this);
+        for (int i = 0; i < SpectrumShaders.STYLE_IDS.length; i++) {
+            MaterialButton item = (MaterialButton) styleButtonRow.getChildAt(i);
+            boolean selected = SpectrumShaders.STYLE_IDS[i].equals(current);
+            item.setBackgroundTintList(ColorStateList.valueOf(selected
+                    ? themeColor(com.google.android.material.R.attr.colorPrimary, 0xFF6EE7F2)
+                    : 0xFF25364D));
+            item.setTextColor(selected
+                    ? themeColor(com.google.android.material.R.attr.colorOnPrimary, 0xFF07111F)
+                    : themeColor(com.google.android.material.R.attr.colorOnSurface, 0xFFF1F5FA));
+        }
+    }
+
+    private void refreshSpectrumStatus() {
+        if (spectrumStatus != null) spectrumStatus.setText(AudioSpectrumSource.status(this));
+    }
+
+    private void addSpectrumPermissionRow(LinearLayout parent) {
+        LinearLayout row = new LinearLayout(this);
+        boolean needRecord = Build.VERSION.SDK_INT >= 23
+                && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED;
+        if (needRecord) {
+            MaterialButton record = button("授权录音权限", true);
+            record.setOnClickListener(v -> requestPermissions(
+                    new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_RECORD_AUDIO));
+            row.addView(record, weightedButton());
+        }
+        // The playback-capture path is the reliable one on Android 10+; the consent lives until
+        // reboot, so this button doubles as the "re-authorize" entry after one.
+        if (Build.VERSION.SDK_INT >= 29) {
+            MaterialButton projection = button("授权内录（媒体投影）", !needRecord);
+            projection.setOnClickListener(v -> requestProjectionConsent());
+            LinearLayout.LayoutParams params = weightedButton();
+            if (needRecord) params.leftMargin = dp(10);
+            row.addView(projection, params);
+        }
+        if (row.getChildCount() == 0) return;
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, dp(48));
+        rowParams.topMargin = dp(10);
+        parent.addView(row, rowParams);
+    }
+
+    private void requestProjectionConsent() {
+        if (Build.VERSION.SDK_INT < 29) return;
+        android.media.projection.MediaProjectionManager manager =
+                (android.media.projection.MediaProjectionManager)
+                        getSystemService(MEDIA_PROJECTION_SERVICE);
+        if (manager == null) {
+            SafeToast.show(this, "此系统不支持媒体投影授权", Toast.LENGTH_LONG);
+            return;
+        }
+        try {
+            startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_PROJECTION);
+        } catch (Throwable error) {
+            SafeToast.show(this, "无法打开内录授权界面", Toast.LENGTH_LONG);
+        }
     }
 
     private void changed() {
