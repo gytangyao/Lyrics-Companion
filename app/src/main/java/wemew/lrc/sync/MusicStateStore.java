@@ -383,6 +383,23 @@ final class MusicStateStore {
     }
 
     /**
+     * The timeline currently in effect. The web publisher keeps the previous reference between
+     * ticks, so plain reference equality is a reliable "the timeline was reloaded" signal.
+     */
+    static LrcTimeline currentTimeline() {
+        synchronized (LOCK) {
+            return timeline;
+        }
+    }
+
+    /** Current playback rate (1.0 unless the player reports otherwise). */
+    static float playbackSpeed() {
+        synchronized (LOCK) {
+            return playbackSpeed;
+        }
+    }
+
+    /**
      * Whether a write would win channel arbitration, without writing anything. The notification
      * listener asks before it remembers a player package or logs an active-player change, so a
      * write that {@link #update} is about to reject leaves no side effects behind. Informational
@@ -443,7 +460,7 @@ final class MusicStateStore {
                 ? liveSessionLyricSourceName(source) : lyricSourceName;
         return new MusicSnapshot(active, playing, sourceName, title, artist, albumArt, durationMs,
                 position, lyricLoadFinished, catalogLyricAvailable || liveLyricAvailable,
-                displayedLyricSource, at);
+                displayedLyricSource, liveLyricAvailable, at);
     }
 
     /**

@@ -215,6 +215,11 @@ final class LrcTimeline {
         return lines.size();
     }
 
+    /** The full ordered timeline; the web protocol serializes it for remote renderers. */
+    List<Line> lines() {
+        return lines;
+    }
+
     boolean containsLyricText(String value) {
         String normalized = normalizeLyricText(value);
         if (normalized.isEmpty()) return false;
@@ -465,7 +470,7 @@ final class LrcTimeline {
         }
     }
 
-    private static final class Word {
+    static final class Word {
         final long startMs;
         final long durationMs;
         final String text;

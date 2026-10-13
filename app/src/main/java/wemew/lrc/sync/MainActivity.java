@@ -2,6 +2,8 @@ package wemew.lrc.sync;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -67,6 +69,10 @@ public final class MainActivity extends AppCompatActivity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private TextView permissionStatus;
     private TextView musicStatus;
+    private TextView webStatus;
+    private LinearLayout webUrlRows;
+    private MaterialSwitch webSwitch;
+    private boolean bindingSwitches;
     private TextView sectionHeading;
     private TextView sectionDescription;
     private ScrollView mainScroll;
@@ -183,6 +189,27 @@ public final class MainActivity extends AppCompatActivity {
         addPermissionRow(accessCard, "应用权限 / 自启动", false, v -> openApplicationDetails(),
                 null, false, null);
 
+        LinearLayout webCard = card();
+        webCard.addView(sectionLabel("网页歌词"));
+        webSwitch = toggle("网页歌词同步服务",
+                "在车机、平板或电脑的浏览器里打开下面任意地址即可显示歌词；页面端可自行调节字号、颜色与字体。开启后开机也会自动恢复");
+        webSwitch.setChecked(AppPreferences.webEnabled(this));
+        webSwitch.setOnCheckedChangeListener((button, checked) -> {
+            if (bindingSwitches) return;
+            AppPreferences.setWebEnabled(this, checked);
+            if (checked) WebSyncService.start(this);
+            else WebSyncService.stop(this);
+            refreshStatus();
+        });
+        webCard.addView(webSwitch);
+        webStatus = text("", 13, 0xFF9EAFBF, false);
+        webStatus.setLineSpacing(0f, 1.2f);
+        webStatus.setPadding(0, dp(10), 0, dp(4));
+        webCard.addView(webStatus);
+        webUrlRows = new LinearLayout(this);
+        webUrlRows.setOrientation(LinearLayout.VERTICAL);
+        webCard.addView(webUrlRows);
+
         LinearLayout stateCard = card();
         stateCard.addView(sectionLabel("音乐状态"));
         musicStatus = text("等待播放器…", 14, 0xFFD8E1EE, false);
@@ -267,6 +294,7 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout homePage = sectionPage();
         homePage.addView(uiScaleCard, cardMargins());
         homePage.addView(accessCard, cardMargins());
+        homePage.addView(webCard, cardMargins());
         homePage.addView(stateCard, cardMargins());
 
         LinearLayout lyricsPage = sectionPage();
@@ -589,6 +617,49 @@ public final class MainActivity extends AppCompatActivity {
                 + "\n最近成功读取会话：" + formatSessionReadAge(lastRead)
                 + "    当前会话数量：" + MusicNotificationListener.getLastSessionCount()
                 + "\n最近异常信息：" + error);
+        refreshWebStatus();
+    }
+
+    private void refreshWebStatus() {
+        if (webStatus == null || webSwitch == null) return;
+        bindingSwitches = true;
+        webSwitch.setChecked(AppPreferences.webEnabled(this));
+        bindingSwitches = false;
+        boolean running = WebSyncService.isRunning();
+        webStatus.setText(running
+                ? "服务运行中 · 已连接显示端 " + WebSyncService.clientCount() + " 个"
+                : "服务未开启");
+        webStatus.setTextColor(running ? 0xFF6EE7F2 : 0xFF9EAFBF);
+        webUrlRows.removeAllViews();
+        if (!running) return;
+        List<String> urls = WebSyncService.lanUrls();
+        if (urls.isEmpty()) {
+            TextView none = text("未找到局域网地址；请确认手机与显示设备在同一网络", 12,
+                    0xFF8392A8, false);
+            none.setPadding(0, dp(2), 0, dp(2));
+            webUrlRows.addView(none);
+            return;
+        }
+        for (String url : urls) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            TextView label = text(url, 13, 0xFFD8E1EE, false);
+            label.setPadding(0, 0, dp(8), 0);
+            row.addView(label, new LinearLayout.LayoutParams(0, -2, 1f));
+            MaterialButton copy = button("复制", false);
+            copy.setOnClickListener(v -> copyText("网页歌词地址", url));
+            row.addView(copy, new LinearLayout.LayoutParams(dp(72), dp(42)));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+            params.topMargin = dp(4);
+            webUrlRows.addView(row, params);
+        }
+    }
+
+    private void copyText(String label, String value) {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText(label, value));
+        SafeToast.show(this, "已复制", Toast.LENGTH_SHORT);
     }
 
     /** Enlarges controls on low-density automotive screens without affecting lyric typography. */

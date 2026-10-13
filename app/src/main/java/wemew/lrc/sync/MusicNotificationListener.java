@@ -239,6 +239,15 @@ public final class MusicNotificationListener extends NotificationListenerService
                 + " using " + backendName);
         handler.removeCallbacks(sessionPoll);
         handler.postDelayed(sessionPoll, SESSION_POLL_MS);
+        if (AppPreferences.webEnabled(this)) {
+            try {
+                WebSyncService.start(this);
+            } catch (Throwable error) {
+                // Some ROMs restrict background foreground-service starts; the boot receiver
+                // and the settings switch are the other entry points.
+                DiagnosticLog.record(this, "WebSync", "listener start failed: " + error);
+            }
+        }
     }
 
     @Override public void onListenerDisconnected() {
