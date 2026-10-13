@@ -10,11 +10,11 @@ def releaseSigningReady = releaseStoreFile && releaseStorePassword
         && releaseKeyAlias && releaseKeyPassword
 
 android {
-    namespace "com.zuoqirun.lyricscompanion"
+    namespace "wemew.lrc.sync"
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.zuoqirun.lyricscompanion"
+        applicationId "wemew.lrc.sync"
         minSdk 19
         targetSdk 36
         versionCode Integer.parseInt(System.getenv("APP_VERSION_CODE") ?: "1")
