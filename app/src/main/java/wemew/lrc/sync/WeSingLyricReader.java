@@ -37,19 +37,14 @@ public final class WeSingLyricReader extends AccessibilityService {
     private static final int LINE_MAX_CHARS = 40;
 
     private long lastWalkAtMs;
-    private int diagnosticDumps;
     private String lastTitle = "";
     private long lastPositionMs = -1L;
     private long lastDurationMs = -1L;
     private String songKey = "";
-    /** Lyric lines in first-seen order: text → start ms (real anchors + interpolated). */
+    /** Lyric lines in start order: text → clock value when the line reached the ladder top. */
     private final LinkedHashMap<String, Long> lineStarts = new LinkedHashMap<>();
-    /**
-     * Lines from the first visible batch without a start yet; they anchor evenly between the
-     * last real anchor and the first scroll-in anchor once the song advances, which
-     * self-corrects the early part of the timeline (a fixed guess drifted badly on slow songs).
-     */
-    private final List<String> pendingFirstBatch = new ArrayList<>();
+    /** The current ladder-top line; a change means the previous line ended and this started. */
+    private String lastLadderTop = "";
 
     static boolean enabled(Context context) {
         String raw = Settings.Secure.getString(context.getContentResolver(),
@@ -86,14 +81,14 @@ public final class WeSingLyricReader extends AccessibilityService {
     // ---- collection ----
 
     private void handle(AccessibilityNodeInfo root) {
-        // Ordered full-tree texts: tree order approximates the on-screen lyric order.
+        // Ordered full-tree texts feed the title and clock extraction.
         List<String> ordered = new ArrayList<>(64);
         walkOrdered(root, ordered, 0);
-        if (diagnosticDumps < 2) {
-            diagnosticDumps++;
-            DiagnosticLog.record(this, "WeSing", "dump[" + ordered.size() + "]: "
-                    + String.join("|", ordered));
-        }
+        // Geometry walk: the lyric ladder (verified: rows spaced ~101 px inside the vertical
+        // band, chrome lives outside it; the ladder TOP row is the line being sung).
+        List<Row> band = new ArrayList<>(24);
+        walkLadder(root, band, 0);
+        List<Row> ladder = extractLadder(band);
 
         Clock clock = clockFrom(ordered);
         if (clock.positionMs < 0L) return;
@@ -102,7 +97,7 @@ public final class WeSingLyricReader extends AccessibilityService {
                 || (lastPositionMs >= 0L && clock.positionMs < lastPositionMs - 3_000L);
         if (newSong) {
             lineStarts.clear();
-            pendingFirstBatch.clear();
+            lastLadderTop = "";
             songKey = title + "/" + clock.durationMs;
             lastDurationMs = -1L;
             if (!TextUtils.isEmpty(lastTitle) && !TextUtils.equals(title, lastTitle)) {
@@ -114,35 +109,20 @@ public final class WeSingLyricReader extends AccessibilityService {
         lastDurationMs = clock.durationMs;
         lastTitle = title;
 
-        // Line stamping. The first walk that sees lyrics gets its first line (the one being
-        // sung) as a real anchor at the clock; the rest of that batch stays pending. Every
-        // later new text is a scroll-in — the true start of that line — and carries the clock;
-        // the pending early lines are then interpolated evenly between the previous anchor and
-        // it. Stamps get a +size() epsilon so they stay unique (the timeline is keyed by time).
-        boolean firstBatchWalk = lineStarts.isEmpty() && pendingFirstBatch.isEmpty();
-        for (String text : ordered) {
-            if (lineStarts.containsKey(text) || pendingFirstBatch.contains(text)) continue;
-            if (!isLyricLine(text, title)) continue;
-            if (firstBatchWalk) {
-                if (lineStarts.isEmpty()) {
-                    lineStarts.put(text, clock.positionMs);
-                } else {
-                    pendingFirstBatch.add(text);
+        // The ladder top is the current line; when it changes, the new top line just started.
+        // Fast scrolls can advance two rows at once — stamp both, newest last.
+        if (!ladder.isEmpty()) {
+            String top = ladder.get(0).text;
+            if (!TextUtils.equals(top, lastLadderTop)) {
+                if (!lineStarts.containsKey(top) && !lastLadderTop.isEmpty()
+                        && ladderHas(ladder, lastLadderTop) && ladder.indexOf(
+                                findRow(ladder, lastLadderTop)) >= 2) {
+                    // The previous top is still on screen two slots down: one line was skipped.
+                    lineStarts.put(lastLadderTop, clock.positionMs - 3_000L);
                 }
-            } else {
-                long previous = lastAnchorMs();
-                long start = clock.positionMs + lineStarts.size();
-                int queued = pendingFirstBatch.size();
-                long share = queued > 0
-                        ? Math.max(500L, (start - previous) / (queued + 1)) : 0L;
-                for (int i = 0; i < queued; i++) {
-                    lineStarts.put(pendingFirstBatch.get(i),
-                            previous + share * (i + 1) + lineStarts.size());
-                }
-                pendingFirstBatch.clear();
-                lineStarts.put(text, start + 1);
+                lineStarts.put(top, clock.positionMs + lineStarts.size());
+                lastLadderTop = top;
             }
-            if (lineStarts.size() + pendingFirstBatch.size() > 200) break;
         }
 
         List<LrcTimeline.Line> lines = new ArrayList<>(lineStarts.size());
@@ -163,6 +143,14 @@ public final class WeSingLyricReader extends AccessibilityService {
                 : LrcTimeline.fromTimedLines(lines);
         String currentLine = previousText == null ? "" : previousText;
 
+        // 同步取证：每帧记录时钟、梯顶与时间轴命中，与手机截图对时。
+        if (!lineStarts.isEmpty()) {
+            LrcTimeline.At at = timeline.at(clock.positionMs);
+            DiagnosticLog.record(this, "WeSing", "tick clock=" + (clock.positionMs / 1000)
+                    + "s lines=" + lineStarts.size() + " top=[" + lastLadderTop
+                    + "] hitLine=[" + at.lyric + "] hitStart=" + at.lineStartMs);
+        }
+
         MusicPlaybackData data = new MusicPlaybackData(
                 "", title == null ? "" : title, "", null, "", "",
                 lastDurationMs > 0L ? lastDurationMs : -1L,
@@ -170,6 +158,101 @@ public final class WeSingLyricReader extends AccessibilityService {
                 clock.positionMs, SystemClock.elapsedRealtime(), 1f,
                 !currentLine.isEmpty(), currentLine, timeline);
         MusicStateStore.update(this, "wesing", "全民K歌", "com.tencent.karaoke", data);
+    }
+
+    /** A candidate ladder row: a text node with its screen geometry. */
+    static final class Row {
+        final String text;
+        final int top;
+        final int height;
+
+        Row(String text, int top, int height) {
+            this.text = text;
+            this.top = top;
+            this.height = height;
+        }
+    }
+
+    /** The lyric band as fractions of screen height; no absolute pixels anywhere. */
+    private boolean inLyricBand(int top, int height) {
+        int screen = getResources().getDisplayMetrics().heightPixels;
+        return height > 0 && top >= screen * 22 / 100 && top <= screen * 88 / 100;
+    }
+
+    /**
+     * Resolution-independent ladder extraction: rows that share the median height (within a
+     * ratio band), then the longest run of consecutive rows whose vertical gaps stay close to
+     * the median gap. The lyric ladder is a uniform grid on every device — a phone at 71/101 px
+     * and a tablet at 142/202 px pass the same ratio tests.
+     */
+    static List<Row> extractLadder(List<Row> bandRows) {
+        if (bandRows.size() < 2) return new ArrayList<>(bandRows);
+        List<Row> byHeight = new ArrayList<>(bandRows);
+        byHeight.sort((a, b) -> Integer.compare(a.height, b.height));
+        int medianHeight = byHeight.get(byHeight.size() / 2).height;
+        List<Row> sized = new ArrayList<>();
+        for (Row row : bandRows) {
+            if (row.height * 10 >= medianHeight * 6 && row.height * 10 <= medianHeight * 18) {
+                sized.add(row);
+            }
+        }
+        if (sized.size() < 2) return sized;
+        List<Row> byTop = new ArrayList<>(sized);
+        byTop.sort((a, b) -> Integer.compare(a.top, b.top));
+        List<Integer> gaps = new ArrayList<>();
+        for (int i = 1; i < byTop.size(); i++) {
+            int gap = byTop.get(i).top - byTop.get(i - 1).top;
+            if (gap > 0) gaps.add(gap);
+        }
+        if (gaps.isEmpty()) return byTop;
+        java.util.Collections.sort(gaps);
+        int medianGap = gaps.get(gaps.size() / 2);
+        int bestStart = 0;
+        int bestLength = 1;
+        int runStart = 0;
+        for (int i = 1; i < byTop.size(); i++) {
+            int gap = byTop.get(i).top - byTop.get(i - 1).top;
+            boolean regular = gap * 10 >= medianGap * 7 && gap * 10 <= medianGap * 14;
+            if (!regular) runStart = i;
+            if (i - runStart + 1 > bestLength) {
+                bestLength = i - runStart + 1;
+                bestStart = runStart;
+            }
+        }
+        return new ArrayList<>(byTop.subList(bestStart, bestStart + bestLength));
+    }
+
+    private void walkLadder(AccessibilityNodeInfo node, List<Row> band, int depth) {
+        if (node == null || depth > 25 || band.size() > 40) return;
+        CharSequence text = node.getText();
+        if (text != null) {
+            String value = text.toString().trim();
+            if (value.length() >= 2 && value.length() <= 40
+                    && !value.matches("\\d{1,2}:\\d{2}") && !value.matches("[+\\d\\s.%/·]+")) {
+                android.graphics.Rect bounds = new android.graphics.Rect();
+                node.getBoundsInScreen(bounds);
+                if (inLyricBand(bounds.top, bounds.height())) {
+                    band.add(new Row(value, bounds.top, bounds.height()));
+                }
+            }
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            walkLadder(node.getChild(i), band, depth + 1);
+        }
+    }
+
+    private boolean ladderHas(List<Row> ladder, String text) {
+        for (Row row : ladder) {
+            if (row.text.equals(text)) return true;
+        }
+        return false;
+    }
+
+    private Row findRow(List<Row> ladder, String text) {
+        for (Row row : ladder) {
+            if (row.text.equals(text)) return row;
+        }
+        return null;
     }
 
     /** Lyric-candidate filter: Chinese-ish sentence, not chrome, not the title, not a clock. */
@@ -268,7 +351,8 @@ public final class WeSingLyricReader extends AccessibilityService {
                 "调音", "练唱", "选片段", "录视频", "完成", "和友友一起大合唱", "乐团和声", "换主题",
                 "前往歌房演唱", "发起合唱", "升降调", "高品质", "开始大合唱", "重录", "AI演唱",
                 "开始演唱", "合唱", "歌房唱", "原唱", "HQ", "·", "/", "原唱伴唱", "已合拍",
-                "轻唱热身", "录屏", "跳过尾奏", "立即演唱", "标准音质", "超级会员上线,开通解锁高等级权益"};
+                "轻唱热身", "录屏", "跳过尾奏", "立即演唱", "标准音质", "超级会员上线,开通解锁高等级权益",
+                "首句助唱", "尾句助唱", "智能修音", "抢唱", "接唱", "已开嗓", "热麦"};
 
         static boolean isChrome(String text) {
             String clean = text.trim();
@@ -336,6 +420,8 @@ public final class WeSingLyricReader extends AccessibilityService {
             walkOrdered(node.getChild(i), out, depth + 1);
         }
     }
+
+    /** Forensic dump with bounds so lyric geometry (current line = tallest) can be derived. */
 
     // ---- UI helpers ----
 
