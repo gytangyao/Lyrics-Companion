@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html data-ws-url="wss://socket.wemew.com/websocket/bluetooth_box/f819730e-867e-4b62-8424-f353d494784e"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>微喵歌词同步</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    body {
+        background: #0B1524;
+        font-family: sans-serif;
+        color: #F2F7FF;
+        -webkit-user-select: none;
+        user-select: none;
+    }
+    #stage {
+        position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+        display: -webkit-flex; display: flex;
+        -webkit-flex-direction: column; flex-direction: column;
+        -webkit-align-items: center; align-items: center;
+        -webkit-justify-content: center; justify-content: center;
+        padding: 24px;
+    }
+    #coverWrap {
+        position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+        background-position: center; background-size: cover;
+        display: none;
+    }
+    #coverShade {
+        position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+        background: #0B1524;
+        opacity: 0.78;
+    }
+    #meta {
+        position: relative;
+        text-align: center;
+        max-width: 92%;
+        margin-bottom: 6px;
+    }
+    #title { font-size: 22px; font-weight: bold; color: #F2F7FF; white-space: nowrap; overflow: hidden; }
+    #artist { font-size: 15px; color: #8FA3BF; margin-top: 4px; white-space: nowrap; overflow: hidden; }
+    #lyricWrap {
+        position: relative;
+        width: 100%;
+        max-width: 1280px;
+        text-align: center;
+    }
+    #lineBox {
+        position: relative;
+        width: 100%;
+        display: block;
+        line-height: 1.35;
+    }
+    #lineBase, #lineFill {
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-weight: bold;
+    }
+    #lineBase { color: #8FA3BF; }
+    #lineClip {
+        position: absolute; left: 0; top: 0;
+        width: 100%;
+        overflow: hidden;
+    }
+    #lineFill { color: #6EE7F2; }
+    /* 逐词单元：wub 是基色字，wuf 是高亮裁剪层（按该词的演唱进度揭示）。 */
+    .wu { position: relative; display: inline-block; }
+    .wub { display: inline-block; white-space: pre; color: #8FA3BF; }
+    .wuf { position: absolute; left: 0; top: 0; height: 100%; overflow: hidden; width: 0; }
+    .wut { display: inline-block; white-space: pre; color: #6EE7F2; }
+    #translation {
+        position: relative;
+        margin-top: 10px;
+        color: #A9B6C8;
+        font-size: 0.55em;
+        min-height: 1em;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    #nextLine {
+        position: relative;
+        margin-top: 12px;
+        color: #66788F;
+        font-size: 0.45em;
+        min-height: 1em;
+        white-space: nowrap;
+        overflow: hidden;
+    }
+    #interlude {
+        position: relative;
+        display: none;
+        font-size: 1em;
+        color: #6EE7F2;
+        letter-spacing: 0.4em;
+    }
+    .pulse { -webkit-animation: pulse 2.2s ease-in-out infinite; animation: pulse 2.2s ease-in-out infinite; }
+    @-webkit-keyframes pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+    @keyframes pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+    #connDot {
+        position: absolute; right: 14px; top: 14px;
+        width: 12px; height: 12px; border-radius: 6px;
+        background: #66788F;
+    }
+    #settingsBtn {
+        position: absolute; left: 14px; top: 8px;
+        width: 44px; height: 44px;
+        color: #8FA3BF;
+        font-size: 26px;
+        text-align: center;
+        line-height: 44px;
+        cursor: pointer;
+    }
+    #settingsPanel {
+        position: absolute; left: 0; top: 0; bottom: 0;
+        width: 320px; max-width: 86%;
+        background: #101E31;
+        border-right: 1px solid #22344E;
+        padding: 20px 18px;
+        overflow-y: auto;
+        display: none;
+        z-index: 30;
+        color: #D8E1EE;
+        font-size: 14px;
+        -webkit-transform: translateX(-100%); transform: translateX(-100%);
+        -webkit-transition: -webkit-transform 0.25s ease; transition: transform 0.25s ease;
+    }
+    #settingsPanel.open {
+        display: block;
+        -webkit-transform: translateX(0); transform: translateX(0);
+    }
+    #settingsPanel h2 { font-size: 16px; color: #6EE7F2; margin: 4px 0 14px; }
+    .field { margin-bottom: 16px; }
+    .field label { display: block; margin-bottom: 6px; color: #A9B6C8; }
+    .field input[type=range] { width: 100%; }
+    .field select, .field input[type=text] {
+        width: 100%; padding: 6px; background: #17263A; color: #F3F7FC;
+        border: 1px solid #2C4160; border-radius: 6px;
+        font-size: 14px;
+    }
+    .colorRow { overflow: hidden; }
+    .colorRow input[type=color] {
+        width: 54px; height: 34px; padding: 0; border: none; background: none;
+        vertical-align: middle; float: left;
+    }
+    .colorRow input[type=text] { width: 120px; float: left; margin-left: 8px; }
+    .checkRow label { color: #D8E1EE; }
+    #closeSettings {
+        margin-top: 8px; width: 100%; padding: 10px;
+        background: #6EE7F2; color: #07111F; border: none; border-radius: 8px;
+        font-size: 15px; font-weight: bold;
+    }
+    #hint { position: absolute; bottom: 10px; width: 100%; text-align: center; color: #46586E; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="stage">
+    <div id="coverWrap"><div id="coverShade"></div></div>
+    <div id="meta" style="font-family: &quot;Noto Sans SC&quot;, &quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, &quot;Heiti SC&quot;, sans-serif;">
+        <div id="title">微喵歌词同步</div>
+        <div id="artist">等待连接…</div>
+    </div>
+    <div id="lyricWrap" style="font-size: 56px; font-family: &quot;Noto Sans SC&quot;, &quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, &quot;Heiti SC&quot;, sans-serif;">
+        <div id="lineBox" style="display: none;">
+            <div id="lineBase" style="color: rgb(143, 163, 191);"></div>
+            <div id="lineClip"><div id="lineFill" style="color: rgb(110, 231, 242);"></div></div>
+        </div>
+        <div id="translation"></div>
+        <div id="nextLine"></div>
+        <div id="interlude" class="pulse" style="display: block;">♪ ♪ ♪</div>
+    </div>
+    <div id="connDot"></div>
+    <div id="settingsBtn">⚙</div>
+    <div id="settingsPanel">
+        <h2>显示设置</h2>
+        <div class="field">
+            <label>字号：<span id="fontSizeLabel">56</span> px</label>
+            <input type="range" id="fontSize" min="24" max="96" step="2">
+        </div>
+        <div class="field">
+            <label>基色（未唱）</label>
+            <div class="colorRow">
+                <input type="color" id="baseColor">
+                <input type="text" id="baseColorText" maxlength="7">
+            </div>
+        </div>
+        <div class="field">
+            <label>高亮色（已唱）</label>
+            <div class="colorRow">
+                <input type="color" id="highlightColor">
+                <input type="text" id="highlightColorText" maxlength="7">
+            </div>
+        </div>
+        <div class="field">
+            <label>字体</label>
+            <select id="fontFamily">
+                <option value="default">默认（黑体）</option>
+                <option value="kai">楷体</option>
+                <option value="song">宋体</option>
+                <option value="yuan">圆体</option>
+                <option value="serif">衬线</option>
+                <option value="mono">等宽</option>
+            </select>
+        </div>
+        <div class="field checkRow">
+            <label><input type="checkbox" id="showTranslation"> 显示翻译</label>
+        </div>
+        <div class="field checkRow">
+            <label><input type="checkbox" id="showNext"> 显示下一句</label>
+        </div>
+        <div class="field">
+            <label>连接地址（门店号 = 走云端；IP:端口 = 局域网）</label>
+            <input type="text" id="hostInput" placeholder="门店号 或 192.168.1.5:8765">
+            <button id="connectHost" style="margin-top:8px;width:100%;padding:9px;background:#6EE7F2;color:#07111F;border:none;border-radius:8px;font-size:14px;font-weight:bold;">连接</button>
+        </div>
+        <button id="closeSettings">完成</button>
+    </div>
+    <div id="hint">设置保存在本机 · 键盘 ← → 可微调歌词时间</div>
+</div>
+<script>
+window.onerror = function (m) { document.documentElement.setAttribute("data-error", String(m)); };
+var __RealWS = window.WebSocket;
+window.WebSocket = function (url) {
+  document.documentElement.setAttribute("data-ws-url", String(url));
+  var s = new __RealWS(url);
+  s.addEventListener("open", function () { document.documentElement.setAttribute("data-ws-open", "1"); });
+  s.addEventListener("close", function (e) { document.documentElement.setAttribute("data-ws-close", String(e.code)); });
+  return s;
+};
+
+(function () {
+    'use strict';
+
+    /* ---------------- settings (localStorage, per display device) ---------------- */
+
+    var SETTINGS_KEY = 'wemew.display.settings.v1';
+    var FONT_STACKS = {
+        default: '"Noto Sans SC","Microsoft YaHei","PingFang SC","Heiti SC",sans-serif',
+        kai: '"KaiTi","STKaiti","楷体",serif',
+        song: '"SimSun","STSong","宋体",serif',
+        yuan: '"YouYuan","Yuanti SC","幼圆",sans-serif',
+        serif: 'Georgia,"Noto Serif SC",serif',
+        mono: '"Courier New",monospace'
+    };
+    var settings = {
+        fontSize: 56,
+        baseColor: '#8FA3BF',
+        highlightColor: '#6EE7F2',
+        fontFamily: 'default',
+        showTranslation: true,
+        showNext: true
+    };
+
+    function loadSettings() {
+        try {
+            var raw = window.localStorage.getItem(SETTINGS_KEY);
+            if (raw) {
+                var saved = JSON.parse(raw);
+                for (var key in settings) {
+                    if (saved.hasOwnProperty(key)) settings[key] = saved[key];
+                }
+            }
+        } catch (error) { /* private mode or old browser: keep defaults */ }
+    }
+
+    function saveSettings() {
+        try {
+            window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+        } catch (error) { }
+    }
+
+    /* ---------------- protocol state ---------------- */
+
+    var PROTOCOL = 1;
+    var lines = [];            // matched timeline: [{t,d,text,translation,words:[{t,d,text}]}]
+    var liveMode = false;      // player live lyric (no timing): text arrives via line frames
+    var liveText = '';
+    var liveNext = '';
+    var liveTranslation = '';
+    var anchor = { positionMs: 0, ts: 0, speed: 1, playing: false, active: false };
+    var clockOffset = 0;       // localNow - serverNow
+    var manualOffsetMs = 0;    // keyboard nudge for this device, client-side only
+    var artVersionSeen = -1;
+    var lineIndexShown = -2;   // forces first paint
+    var textShown = null;
+
+    function serverNow() {
+        return Date.now() - clockOffset;
+    }
+
+    function displayPosition() {
+        if (!anchor.ts) return 0;
+        var elapsed = anchor.playing ? Math.max(0, serverNow() - anchor.ts) : 0;
+        return anchor.positionMs + elapsed * anchor.speed + manualOffsetMs;
+    }
+
+    /* ---------------- transport ---------------- */
+
+    var socket = null;
+    var reconnectTimer = null;
+    var pollTimer = null;
+    var pingTimer = null;
+    var cloudTimer = null;
+    var HOST_KEY = 'wemew.display.address';
+    var CLOUD_ROOM = 'wss://socket.wemew.com/websocket/bluetooth_box/';
+    var DISPLAY_ID_KEY = 'wemew.display.id';
+    /** '' = same-origin (served by the app); 'ip:port' = LAN; UUID = cloud room (barId). */
+    var remoteHost = '';
+    var cloudBarId = '';
+    var displayId = '';
+
+    function addressParam() {
+        var host = window.location.search.match(/[?&]host=([^&]+)/);
+        var bar = window.location.search.match(/[?&]barId=([^&]+)/);
+        var value = bar ? bar[1] : (host ? host[1] : null);
+        return value === null ? null : decodeURIComponent(value);
+    }
+
+    function classify(address) {
+        var value = (address || '').trim()
+                .replace(/^wss?:\/\/|^https?:\/\//, '').replace(/\/.*$/, '');
+        if (/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
+                .test(value)) {
+            cloudBarId = value;
+            remoteHost = '';
+        } else {
+            cloudBarId = '';
+            remoteHost = value;
+        }
+    }
+
+    function resolveHost() {
+        var fromUrl = addressParam();
+        if (fromUrl !== null && fromUrl.trim()) {
+            classify(fromUrl);
+        } else {
+            try { classify(window.localStorage.getItem(HOST_KEY) || ''); } catch (error) { }
+        }
+        if (!remoteHost && !cloudBarId && !window.location.host) {
+            try { classify(window.localStorage.getItem(HOST_KEY) || ''); } catch (error) { }
+        }
+        try {
+            displayId = window.localStorage.getItem(DISPLAY_ID_KEY) || '';
+            if (!displayId) {
+                var hex = '0123456789ABCDEF';
+                displayId = 'DISPLAY';
+                for (var i = 0; i < 8; i++) {
+                    displayId += hex.charAt(Math.floor(Math.random() * 16));
+                }
+                window.localStorage.setItem(DISPLAY_ID_KEY, displayId);
+            }
+        } catch (error) {
+            displayId = 'DISPLAY' + new Date().getTime() % 100000000;
+        }
+    }
+
+    function wsUrl() {
+        if (cloudBarId) return CLOUD_ROOM + cloudBarId;
+        if (!remoteHost) {
+            return (window.location.protocol === 'https:' ? 'wss://' : 'ws://')
+                    + window.location.host + '/ws';
+        }
+        return 'ws://' + remoteHost + '/ws';
+    }
+
+    function restBase() {
+        return remoteHost && !cloudBarId ? 'http://' + remoteHost : '';
+    }
+
+    function rememberHost() {
+        var address = cloudBarId || remoteHost;
+        try { window.localStorage.setItem(HOST_KEY, address); } catch (error) { }
+    }
+
+    function reconnectAll() {
+        if (socket) { try { socket.onclose = null; socket.close(); } catch (error) { } socket = null; }
+        if (reconnectTimer) { window.clearTimeout(reconnectTimer); reconnectTimer = null; }
+        if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null; }
+        if (pingTimer) { window.clearInterval(pingTimer); pingTimer = null; }
+        if (cloudTimer) { window.clearInterval(cloudTimer); cloudTimer = null; }
+        anchor.ts = 0;
+        connect();
+    }
+
+    function sendCloudOnline() {
+        send({ type: 'online', sender: 'control_box',
+                data: { deviceId: displayId, timestamp: Date.now() } });
+    }
+
+    function connect() {
+        if (!window.WebSocket) {
+            setDot(cloudBarId ? '#66788F' : '#C9A227');
+            if (!cloudBarId) startPolling();
+            return;
+        }
+        try {
+            socket = new WebSocket(wsUrl());
+        } catch (error) {
+            scheduleReconnect();
+            return;
+        }
+        socket.onopen = function () {
+            setDot('#6EE7F2');
+            if (cloudBarId) {
+                // Cloud room: announce as the display side and keep a 2 s heartbeat.
+                sendCloudOnline();
+                if (cloudTimer) window.clearInterval(cloudTimer);
+                cloudTimer = window.setInterval(sendCloudOnline, 2000);
+            } else {
+                send({ v: PROTOCOL, type: 'hello', data: { protocol: PROTOCOL,
+                        client: { name: 'wemew-test-page', version: '1.0' } } });
+            }
+            if (pingTimer) window.clearInterval(pingTimer);
+            pingTimer = window.setInterval(sendPing, 5000);
+            sendPing();
+        };
+        socket.onmessage = function (event) {
+            handleFrame(event.data);
+        };
+        socket.onclose = function () {
+            setDot('#66788F');
+            scheduleReconnect();
+        };
+        socket.onerror = function () {
+            try { socket.close(); } catch (error) { }
+        };
+    }
+
+    function scheduleReconnect() {
+        if (reconnectTimer) return;
+        reconnectTimer = window.setTimeout(function () {
+            reconnectTimer = null;
+            connect();
+        }, 2000);
+    }
+
+    function send(frame) {
+        if (socket && socket.readyState === 1) {
+            try { socket.send(JSON.stringify(frame)); } catch (error) { }
+        }
+    }
+
+    function sendPing() {
+        send({ v: PROTOCOL, type: 'ping', ts: Date.now() });
+    }
+
+    function startPolling() {
+        if (pollTimer) return;
+        pollTimer = window.setInterval(function () {
+            getJson(restBase() + '/api/state', function (root) {
+                if (!root) return;
+                if (root.track) onTrackData(root.track);
+                if (root.state) onStateData(root.state);
+            });
+        }, 1000);
+        getJson(restBase() + '/api/state', function (root) {
+            if (!root) return;
+            if (root.track) onTrackData(root.track);
+            if (root.state) onStateData(root.state);
+        });
+    }
+
+    function getJson(url, callback) {
+        try {
+            var request = new XMLHttpRequest();
+            request.open('GET', url, true);
+            request.onreadystatechange = function () {
+                if (request.readyState === 4) {
+                    if (request.status >= 200 && request.status < 300) {
+                        var parsed = null;
+                        try { parsed = JSON.parse(request.responseText); } catch (error) { }
+                        callback(parsed);
+                    } else {
+                        callback(null);
+                    }
+                }
+            };
+            request.send(null);
+        } catch (error) {
+            callback(null);
+        }
+    }
+
+    /* ---------------- frame handling (unknown types are ignored) ---------------- */
+
+    function handleFrame(raw) {
+        var frame = null;
+        try { frame = JSON.parse(raw); } catch (error) { return; }
+        if (!frame || !frame.type) return;
+        if (frame.type === 'welcome') { /* capabilities unused by this page in v1 */ }
+        else if (frame.type === 'track') onTrackData(frame.data, frame.ts);
+        else if (frame.type === 'state') onStateData(frame.data, frame.ts);
+        else if (frame.type === 'line') onLineData(frame.data);
+        else if (frame.type === 'pong') onPong(frame);
+        // 'online' room heartbeats and any unknown types are ignored (cloud echo included).
+    }
+
+    function onTrackData(data, ts) {
+        if (!data) { return; }
+        anchor.active = data.active;
+        anchor.playing = data.playing;
+        anchor.positionMs = data.positionMs;
+        anchor.speed = data.speed || 1;
+        anchor.ts = ts || Date.now();
+        liveMode = false;
+        lines = [];
+        var lyric = data.lyric;
+        if (lyric && lyric.live) {
+            liveMode = true;
+            liveText = lyric.currentText || '';
+        } else if (lyric && lyric.lines) {
+            lines = lyric.lines;
+        }
+        document.getElementById('title').innerHTML = escapeHtml(data.title || '');
+        var artist = data.artist || '';
+        document.getElementById('artist').innerHTML = escapeHtml(
+                (data.sourceName ? data.sourceName : '') +
+                (artist ? ' · ' + artist : ''));
+        if (data.hasArt && data.artVersion !== artVersionSeen) {
+            artVersionSeen = data.artVersion;
+            var wrap = document.getElementById('coverWrap');
+            wrap.style.backgroundImage = 'url("' + restBase() + '/cover?v=' + artVersionSeen + '")';
+            wrap.style.display = 'block';
+        } else if (!data.hasArt) {
+            artVersionSeen = -1;
+            document.getElementById('coverWrap').style.display = 'none';
+        }
+        lineIndexShown = -2;
+        textShown = null;
+        updateMetaLayout();
+    }
+
+    function onStateData(data, ts) {
+        if (!data) return;
+        anchor.active = data.active;
+        anchor.playing = data.playing;
+        anchor.positionMs = data.positionMs;
+        anchor.speed = data.speed || 1;
+        anchor.ts = ts || Date.now();
+    }
+
+    function onLineData(data) {
+        if (!data) return;
+        liveMode = true;
+        liveText = data.text || '';
+        liveNext = data.nextText || '';
+        liveTranslation = data.translation || '';
+    }
+
+    var clockSamples = [];
+
+    function onPong(frame) {
+        var t0 = frame.data ? Number(frame.data.t0) : 0;
+        var t1 = Number(frame.ts);
+        var t2 = Date.now();
+        if (!t0 || !t1) return;
+        var rtt = t2 - t0;
+        // NTP-lite with symmetric latency: serverNow at the midpoint was t1, the local clock
+        // then read t0 + rtt/2, and serverNow() is defined as localNow - clockOffset.
+        // A single sample jitters with Wi-Fi latency; the median of the last few is steady.
+        clockSamples.push((t0 + rtt / 2) - t1);
+        if (clockSamples.length > 5) clockSamples.shift();
+        var sorted = clockSamples.slice().sort(function (a, b) { return a - b; });
+        clockOffset = sorted[Math.floor(sorted.length / 2)];
+    }
+
+    /* ---------------- karaoke rendering ---------------- */
+
+    function escapeHtml(value) {
+        return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function findLineIndex(position) {
+        var best = -1;
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (position >= line.t && position < line.t + Math.max(1, line.d)) return i;
+            if (position >= line.t) best = i;
+        }
+        // Past the last line's start but inside none: hold the last line a moment.
+        return best;
+    }
+
+    /* 逐词模式：words 拼起来与整行文本一致时，每个词独立按自己的时间轴点亮，
+       与播放器的逐字表现一致；否则退回整行连续擦除（行级 LRC）。 */
+    var lineWordMode = false;
+    var lineWordClips = [];
+    var lineWords = [];
+
+    function wordsMatchText(line) {
+        if (!line.words || !line.words.length) return false;
+        var joined = '';
+        for (var i = 0; i < line.words.length; i++) joined += line.words[i].text || '';
+        return joined === (line.text || '');
+    }
+
+    function buildWordUnits(line) {
+        var html = '';
+        for (var i = 0; i < line.words.length; i++) {
+            var text = escapeHtml(line.words[i].text || '');
+            html += '<span class="wu"><span class="wub">' + text + '</span>'
+                    + '<span class="wuf"><span class="wut">' + text + '</span></span></span>';
+        }
+        return html;
+    }
+
+    function wordProgress(word, position) {
+        if (position >= word.t + word.d) return 1;
+        if (position <= word.t) return 0;
+        return (position - word.t) / Math.max(1, word.d);
+    }
+
+    function lineFillFraction(line, position) {
+        var span = Math.max(1, line.d);
+        return clamp((position - line.t) / span, 0, 1);
+    }
+
+    function clamp(value, low, high) {
+        return value < low ? low : value > high ? high : value;
+    }
+
+    function fitLine() {
+        // Shrink the current line until it fits, for long lines on narrow screens, then copy
+        // the settled size to the highlight twin so both layers wrap identically.
+        var box = document.getElementById('lineBox');
+        var base = document.getElementById('lineBase');
+        var fill = document.getElementById('lineFill');
+        var size = settings.fontSize;
+        var floor = Math.round(settings.fontSize * 0.45);
+        base.style.fontSize = size + 'px';
+        while (size > floor && base.scrollWidth > base.clientWidth + 2) {
+            size -= 2;
+            base.style.fontSize = size + 'px';
+        }
+        fill.style.fontSize = size + 'px';
+        // The highlight twin must keep the FULL line-box width: its parent (#lineClip) shrinks
+        // during the karaoke wipe, and a percentage width would re-centre the text inside the
+        // shrinking window instead of revealing it from the left.
+        fill.style.width = box.clientWidth + 'px';
+    }
+
+    function renderLiveText() {
+        if (textShown !== liveText) {
+            textShown = liveText;
+            var base = document.getElementById('lineBase');
+            var fill = document.getElementById('lineFill');
+            base.innerHTML = escapeHtml(liveText);
+            fill.innerHTML = escapeHtml(liveText);
+            fitLine();
+            document.getElementById('lineClip').style.width = '0%';
+            document.getElementById('translation').innerHTML =
+                    settings.showTranslation ? escapeHtml(liveTranslation) : '';
+            document.getElementById('nextLine').innerHTML =
+                    settings.showNext ? escapeHtml(liveNext) : '';
+        }
+        document.getElementById('interlude').style.display = 'none';
+        document.getElementById('lineBox').style.display = 'block';
+    }
+
+    function renderTimeline() {
+        var position = displayPosition();
+        var index = findLineIndex(position);
+        var line = index >= 0 ? lines[index] : null;
+        var interludeEl = document.getElementById('interlude');
+        if (!line) {
+            if (lineIndexShown !== -1) {
+                lineIndexShown = -1;
+                document.getElementById('lineBox').style.display = 'none';
+                document.getElementById('translation').innerHTML = '';
+                document.getElementById('nextLine').innerHTML =
+                        settings.showNext && lines.length
+                                ? escapeHtml(lines[0] ? lines[0].text : '') : '';
+                interludeEl.style.display = 'block';
+                interludeEl.className = 'pulse';
+            }
+            return;
+        }
+        interludeEl.style.display = 'none';
+        if (index !== lineIndexShown) {
+            lineIndexShown = index;
+            var base = document.getElementById('lineBase');
+            var fill = document.getElementById('lineFill');
+            lineWordMode = wordsMatchText(line);
+            lineWords = lineWordMode ? line.words : [];
+            var markup = lineWordMode ? buildWordUnits(line) : escapeHtml(line.text || '');
+            base.innerHTML = markup;
+            fill.innerHTML = markup;
+            lineWordClips = [];
+            if (lineWordMode) {
+                var units = fill.children;
+                for (var u = 0; u < units.length; u++) {
+                    // childNodes: [wub, wuf] — the clip layer is the second span.
+                    lineWordClips.push(units[u].childNodes[1]);
+                }
+            }
+            document.getElementById('lineBox').style.display = 'block';
+            document.getElementById('translation').innerHTML =
+                    settings.showTranslation ? escapeHtml(line.translation || '') : '';
+            var next = lines[index + 1];
+            document.getElementById('nextLine').innerHTML =
+                    settings.showNext && next ? escapeHtml(next.text || '') : '';
+            fitLine();
+        }
+        if (lineWordMode) {
+            document.getElementById('lineClip').style.width = '100%';
+            for (var w = 0; w < lineWordClips.length; w++) {
+                lineWordClips[w].style.width =
+                        Math.round(wordProgress(lineWords[w], position) * 1000) / 10 + '%';
+            }
+        } else {
+            var fraction = lineFillFraction(line, position);
+            document.getElementById('lineClip').style.width =
+                    Math.round(fraction * 1000) / 10 + '%';
+        }
+    }
+
+    function updateMetaLayout() {
+        var lyric = document.getElementById('lyricWrap');
+        lyric.style.fontSize = settings.fontSize + 'px';
+        var family = FONT_STACKS[settings.fontFamily] || FONT_STACKS.default;
+        var meta = document.getElementById('meta');
+        var lyricWrap = document.getElementById('lyricWrap');
+        meta.style.fontFamily = family;
+        lyricWrap.style.fontFamily = family;
+        var base = document.getElementById('lineBase');
+        var fill = document.getElementById('lineFill');
+        base.style.color = settings.baseColor;
+        fill.style.color = settings.highlightColor;
+        lineIndexShown = -2;
+        textShown = null;
+    }
+
+    function frame() {
+        if (liveMode) renderLiveText();
+        else renderTimeline();
+        rafId = window.requestAnimationFrame
+                ? window.requestAnimationFrame(frame)
+                : window.setTimeout(frame, 50);
+    }
+
+    var rafId = null;
+
+    /* ---------------- settings UI ---------------- */
+
+    function bindSettings() {
+        var fontSize = document.getElementById('fontSize');
+        var fontSizeLabel = document.getElementById('fontSizeLabel');
+        var baseColor = document.getElementById('baseColor');
+        var baseColorText = document.getElementById('baseColorText');
+        var highlightColor = document.getElementById('highlightColor');
+        var highlightColorText = document.getElementById('highlightColorText');
+        var fontFamily = document.getElementById('fontFamily');
+        var showTranslation = document.getElementById('showTranslation');
+        var showNext = document.getElementById('showNext');
+
+        fontSize.value = settings.fontSize;
+        fontSizeLabel.innerHTML = String(settings.fontSize);
+        baseColor.value = settings.baseColor;
+        baseColorText.value = settings.baseColor;
+        highlightColor.value = settings.highlightColor;
+        highlightColorText.value = settings.highlightColor;
+        fontFamily.value = settings.fontFamily;
+        showTranslation.checked = !!settings.showTranslation;
+        showNext.checked = !!settings.showNext;
+
+        fontSize.onchange = fontSize.oninput = function () {
+            settings.fontSize = parseInt(fontSize.value, 10) || 56;
+            fontSizeLabel.innerHTML = String(settings.fontSize);
+            apply();
+        };
+        baseColor.onchange = function () {
+            settings.baseColor = baseColor.value;
+            baseColorText.value = baseColor.value;
+            apply();
+        };
+        baseColorText.onchange = function () {
+            if (/^#[0-9a-fA-F]{6}$/.test(baseColorText.value)) {
+                settings.baseColor = baseColorText.value;
+                baseColor.value = baseColorText.value;
+                apply();
+            } else {
+                baseColorText.value = settings.baseColor;
+            }
+        };
+        highlightColor.onchange = function () {
+            settings.highlightColor = highlightColor.value;
+            highlightColorText.value = highlightColor.value;
+            apply();
+        };
+        highlightColorText.onchange = function () {
+            if (/^#[0-9a-fA-F]{6}$/.test(highlightColorText.value)) {
+                settings.highlightColor = highlightColorText.value;
+                highlightColor.value = highlightColorText.value;
+                apply();
+            } else {
+                highlightColorText.value = settings.highlightColor;
+            }
+        };
+        fontFamily.onchange = function () {
+            settings.fontFamily = fontFamily.value;
+            apply();
+        };
+        showTranslation.onchange = function () {
+            settings.showTranslation = showTranslation.checked;
+            apply();
+        };
+        showNext.onchange = function () {
+            settings.showNext = showNext.checked;
+            apply();
+        };
+        document.getElementById('settingsBtn').onclick = function () {
+            var panel = document.getElementById('settingsPanel');
+            panel.className = panel.className === 'open' ? '' : 'open';
+        };
+        document.getElementById('closeSettings').onclick = function () {
+            document.getElementById('settingsPanel').className = '';
+        };
+        var hostInput = document.getElementById('hostInput');
+        var connectHost = document.getElementById('connectHost');
+        hostInput.value = cloudBarId || remoteHost;
+        hostInput.onkeydown = function (event) {
+            if (event.keyCode === 13) connectHost.onclick();
+        };
+        connectHost.onclick = function () {
+            classify(hostInput.value || '');
+            rememberHost();
+            document.getElementById('settingsPanel').className = '';
+            var target = cloudBarId || remoteHost;
+            SafeToastLocal(target ? '正在连接 ' + (cloudBarId ? '门店 ' + cloudBarId : target)
+                    : '已切回同源地址');
+            reconnectAll();
+        };
+
+        function apply() {
+            saveSettings();
+            updateMetaLayout();
+        }
+    }
+
+    function setDot(color) {
+        document.getElementById('connDot').style.background = color;
+    }
+
+    /* keyboard nudge: ← / → shift the local reading of the clock by 250ms */
+    function bindKeys() {
+        function onKey(event) {
+            if (event.keyCode === 37) {
+                manualOffsetMs -= 250;
+            } else if (event.keyCode === 39) {
+                manualOffsetMs += 250;
+            } else {
+                return;
+            }
+            lineIndexShown = -2;
+        }
+        if (window.addEventListener) {
+            window.addEventListener('keydown', onKey, false);
+            window.addEventListener('resize', function () {
+                lineIndexShown = -2;
+                textShown = null;
+            }, false);
+        }
+    }
+
+    /* ---------------- boot ---------------- */
+
+    function SafeToastLocal(message) {
+        var hint = document.getElementById('hint');
+        if (!hint) return;
+        hint.innerHTML = message;
+        window.setTimeout(function () {
+            hint.innerHTML = '设置保存在本机 · 键盘 ← → 可微调歌词时间';
+        }, 2500);
+    }
+
+    loadSettings();
+    resolveHost();
+    rememberHost();
+    updateMetaLayout();
+    bindSettings();
+    bindKeys();
+    connect();
+    frame();
+})();
+</script>
+
+
+</body></html>

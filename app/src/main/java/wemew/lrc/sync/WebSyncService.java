@@ -50,6 +50,7 @@ public final class WebSyncService extends Service {
     private WebStatePublisher publisher;
     private WebDisplayServer server;
     private StoreBindingClient bindingClient;
+    private CloudSyncClient cloudSync;
     private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
     /** If a publish tick stalls this long the whole stack is rebuilt and the stacks logged. */
     private static final long WATCHDOG_STALL_MS = 20_000L;
@@ -62,8 +63,6 @@ public final class WebSyncService extends Service {
                     && current.tickAgeMs() > WATCHDOG_STALL_MS) {
                 recoverFromStall();
             }
-            // Trials expire and bindings land between ticks; keep the server in step.
-            evaluateGate();
             watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS);
         }
     };
@@ -109,6 +108,17 @@ public final class WebSyncService extends Service {
                 ? "" : service.publisher.lastPushSummary();
     }
 
+    static boolean cloudConnected() {
+        WebSyncService service = instance;
+        return service != null && service.cloudSync != null && service.cloudSync.connected();
+    }
+
+    static int cloudDisplayCount() {
+        WebSyncService service = instance;
+        return service == null || service.cloudSync == null ? 0
+                : service.cloudSync.onlineDisplays();
+    }
+
     /** Best-effort LAN URLs for the settings page; empty when the server is not running. */
     static List<String> lanUrls() {
         WebSyncService service = instance;
@@ -150,43 +160,25 @@ public final class WebSyncService extends Service {
         clients = new WebSocketClients();
         covers = new CoverRegistry();
         publisher = new WebStatePublisher(this, clients, covers, versionName());
-        // Binding always runs — it is also the self-healing path back for a gated device.
+        // Binding always runs; a new barId re-targets the cloud room.
         bindingClient = new StoreBindingClient(this);
         bindingClient.start();
+        cloudSync = new CloudSyncClient(this, publisher);
+        cloudSync.applyBarId(AppPreferences.boundBarId(this));
+        startServer();
+        publisher.start();
+        publisher.setCloud(cloudSync);
         startInForeground();
-        if (LicenseGate.serviceAllowed(this)) {
-            startServer();
-            publisher.start();
-        } else {
-            DiagnosticLog.record(this, "WebSync", "license gate closed; server withheld");
-        }
         watchdogHandler.removeCallbacks(watchdog);
         watchdogHandler.postDelayed(watchdog, WATCHDOG_INTERVAL_MS);
         DiagnosticLog.record(this, "WebSync", "service started port="
                 + (server == null ? -1 : server.getListeningPort()));
     }
 
-    /** Starts or stops the sync server to match the license verdict; idempotent. */
-    private void evaluateGate() {
-        boolean allowed = LicenseGate.serviceAllowed(this);
-        if (allowed && server == null) {
-            startServer();
-            if (publisher != null) publisher.start();
-            startInForeground();
-            DiagnosticLog.record(this, "WebSync", "license gate opened; server started port="
-                    + (server == null ? -1 : server.getListeningPort()));
-        } else if (!allowed && server != null) {
-            if (publisher != null) publisher.stop();
-            server.stop();
-            server = null;
-            startInForeground();
-            DiagnosticLog.record(this, "WebSync", "license gate closed; server stopped");
-        }
-    }
-
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && ACTION_REEVALUATE.equals(intent.getAction())) {
-            evaluateGate();
+        if (intent != null && ACTION_REEVALUATE.equals(intent.getAction())
+                && cloudSync != null) {
+            cloudSync.applyBarId(AppPreferences.boundBarId(this));
         }
         return START_STICKY;
     }
@@ -217,15 +209,14 @@ public final class WebSyncService extends Service {
             server.stop();
             server = null;
         }
-        if (LicenseGate.serviceAllowed(this)) {
-            startServer();
-            if (publisher != null) publisher.start();
-        }
+        startServer();
+        if (publisher != null) publisher.start();
     }
 
     @Override public void onDestroy() {
         instance = null;
         watchdogHandler.removeCallbacks(watchdog);
+        if (cloudSync != null) cloudSync.stop();
         if (bindingClient != null) bindingClient.stop();
         if (publisher != null) publisher.stop();
         if (server != null) {
@@ -282,9 +273,11 @@ public final class WebSyncService extends Service {
     }
 
     private Notification buildNotification() {
-        String summary = LicenseGate.trialSummary(this);
-        String text = summary != null ? summary
-                : (server == null ? "等待授权…" : primaryUrl());
+        boolean cloudUp = cloudSync != null && cloudSync.connected();
+        String text = cloudUp
+                ? "云端已连接 · " + primaryUrl()
+                : (AppPreferences.boundBarId(this).isEmpty()
+                        ? "等待门店登记设备码" : primaryUrl());
         Intent open = new Intent(this, MainActivity.class);
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0, open,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);

@@ -10,13 +10,26 @@
 
 ## 0. 三分钟接入
 
-1. **直接用内置页**：浏览器打开 `http://<手机IP>:8765/` —— App 已打包参考显示页，
-   开箱即用（支持逐字高亮与字号/颜色/字体调节）。
-2. **iframe 嵌入**：`<iframe src="http://<手机IP>:8765/"></iframe>`（同源直连，
-   无需 `?host=`；跨源页面嵌入时也可用 `?host=<手机IP>:8765` 指向手机）。
-3. **自研显示端**：连 `ws://<手机IP>:8765/ws` → 收 `welcome` 快照 → 处理
-   `track`/`state`/`line`/`pong` → 按 §6 时间模型本地插值。全文本文档也在
-   `http://<手机IP>:8765/protocol`。v1 无鉴权，仅限可信局域网。
+**推荐：云端接入（不受手机 IP 变化影响）** —— 手机 App 绑定门店后自动加入微喵云房间
+`wss://socket.wemew.com/websocket/bluetooth_box/{barId}` 并持续推送协议 v1 帧；显示端
+连同一房间即可，地址就是门店号（barId，见 App 首页「门店授权」卡）：
+
+1. **参考显示页**：仓库 `web-test-client/index.html`（浏览器直接打开或任意静态服务器
+   托管），用 `?barId={门店号}` 直达，或在页面 ⚙ 里填门店号。
+2. **自研显示端（云端）**：连 `wss://socket.wemew.com/websocket/bluetooth_box/{barId}`，
+   每 2 秒发房间心跳
+   `{"type":"online","sender":"control_box","data":{"deviceId":"<你的设备ID>","timestamp":<ms>}}`，
+   然后处理收到的协议 v1 帧（`track`/`state`/`line`/`pong`），按 §6 插值。
+   **角色约定**：`control_box` = **显示端**；`control_box_phone` = **手机端（App/歌词来源）**。
+   云是房间广播中继：任意帧原样转发给全房间**含发送者自身**（忽略自己的回显与
+   `online` 心跳即可）；显示端进房后 App 会主动推 `track`+`state` 快照。
+
+**局域网直连（调试用）**：`ws://<手机IP>:8765/ws`（REST 同源 `/api/*`）；显示页用
+`?host=<手机IP>:8765`。App 的 8765 端口不提供显示页，仅 `/protocol` 文档与数据端点。
+v1 无鉴权：云端房间凭 barId 进入，局域网仅限可信网络。
+
+> 云端大帧：`track` 帧携带全量时间轴（典型 4–10KB）已实测经云中继正常收发；
+> 超大曲目建议显示端容忍分帧到达。
 
 
 ## 1. 兼容性规则（双方必须遵守）

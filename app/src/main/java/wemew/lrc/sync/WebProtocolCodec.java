@@ -43,12 +43,15 @@ final class WebProtocolCodec {
         final String type;
         /** Envelope timestamp (the ping echo source), 0 when absent. */
         final long ts;
+        /** Cloud-room role of the sender (control_box / control_box_phone), "" on LAN. */
+        final String sender;
         final JSONObject data;
 
-        Inbound(int version, String type, long ts, JSONObject data) {
+        Inbound(int version, String type, long ts, String sender, JSONObject data) {
             this.version = version;
             this.type = type;
             this.ts = ts;
+            this.sender = sender == null ? "" : sender;
             this.data = data;
         }
     }
@@ -197,7 +200,7 @@ final class WebProtocolCodec {
 
     /** Tolerant parser: any malformed frame yields {@code type == ""}, never an exception. */
     static Inbound parseInbound(String raw) {
-        Inbound empty = new Inbound(WebProtocol.PROTOCOL_VERSION, "", 0L, null);
+        Inbound empty = new Inbound(WebProtocol.PROTOCOL_VERSION, "", 0L, "", null);
         if (raw == null) return empty;
         String text = raw.trim();
         if (text.isEmpty()) return empty;
@@ -206,14 +209,16 @@ final class WebProtocolCodec {
             int version = root.optInt("v", WebProtocol.PROTOCOL_VERSION);
             String type = root.optString("type", "");
             long ts = root.optLong("ts", 0L);
+            String sender = root.optString("sender", "");
             JSONObject data = root.optJSONObject("data");
-            return new Inbound(version, type, ts, data);
+            return new Inbound(version, type, ts, sender, data);
         } catch (Throwable error) {
             return empty;
         }
     }
 
-    private static void put(JSONObject object, String key, Object value) {
+    /** Puts with the checked Android JSONException folded away; keys here are constants. */
+    static void put(JSONObject object, String key, Object value) {
         try {
             object.put(key, value);
         } catch (JSONException error) {

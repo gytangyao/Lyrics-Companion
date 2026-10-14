@@ -55,10 +55,31 @@ final class WebDisplayServer extends NanoWSD {
         return response;
     }
 
+    /**
+     * The app never serves the display page (the reference client lives in the repo's
+     * web-test-client directory by design); this landing text only points integrators at it.
+     */
+    private static final String LANDING_PAGE = "<!doctype html>\n"
+            + "<html><head><meta charset=\"utf-8\"><meta name=\"viewport\""
+            + " content=\"width=device-width,initial-scale=1\">\n"
+            + "<title>微喵歌词同步</title></head>\n"
+            + "<body style=\"margin:0;background:#0B1524;color:#F2F7FF;"
+            + "font-family:sans-serif;display:flex;align-items:center;"
+            + "justify-content:center;height:100vh\">\n"
+            + "<div style=\"max-width:560px;padding:32px;line-height:1.8\">\n"
+            + "<h1 style=\"color:#6EE7F2;margin:0 0 12px\">微喵歌词同步服务</h1>\n"
+            + "<p>本端口是调试通道。正式显示页在仓库的 <b>web-test-client</b> 目录"
+            + "（支持云端门店号连接与逐字高亮）。</p>"
+            + "<p>协议端点：<code>/ws</code>、<code>/api/state</code>、"
+            + "<code>/api/track</code>、<code>/cover?v=N</code>；"
+            + "文档见 <code>/protocol</code> 与仓库 docs/web-protocol.md。</p>\n"
+            + "</div></body></html>\n";
+
     private Response route(NanoHTTPD.IHTTPSession session) {
         String path = pathOf(session);
         if ("/".equals(path) || "/index.html".equals(path)) {
-            return assetResponse("web/index.html", "text/html; charset=utf-8");
+            return NanoHTTPD.newFixedLengthResponse(Response.Status.OK,
+                    "text/html; charset=utf-8", LANDING_PAGE);
         }
         if ("/protocol".equals(path) || "/protocol.md".equals(path)) {
             return assetResponse("web/protocol.md", "text/markdown; charset=utf-8");

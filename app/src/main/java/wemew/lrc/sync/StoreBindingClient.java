@@ -103,11 +103,9 @@ final class StoreBindingClient {
 
     private void poll() {
         try {
-            long[] dateMs = new long[1];
             String id = deviceId(context);
             BindingInfo info = parseBinding(
-                    LyricHttp.get(DEVICE_ENDPOINT + LyricHttp.encode(id), null, dateMs));
-            if (dateMs[0] > 0L) LicenseGate.recordServerTime(context, dateMs[0]);
+                    LyricHttp.get(DEVICE_ENDPOINT + LyricHttp.encode(id), null));
             if (!info.bound) {
                 // Reinstall arbitration: the watermark may remember the registered id while
                 // the derived one changed. Probe it; a bound answer adopts it everywhere.

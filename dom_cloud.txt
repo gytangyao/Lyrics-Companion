@@ -1,6 +1,5 @@
-<!doctype html>
-<html>
-<head>
+<!DOCTYPE html>
+<html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>微喵歌词同步</title>
@@ -156,18 +155,18 @@
 <body>
 <div id="stage">
     <div id="coverWrap"><div id="coverShade"></div></div>
-    <div id="meta">
+    <div id="meta" style="font-family: &quot;Noto Sans SC&quot;, &quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, &quot;Heiti SC&quot;, sans-serif;">
         <div id="title">微喵歌词同步</div>
         <div id="artist">等待连接…</div>
     </div>
-    <div id="lyricWrap">
-        <div id="lineBox">
-            <div id="lineBase"></div>
-            <div id="lineClip"><div id="lineFill"></div></div>
+    <div id="lyricWrap" style="font-size: 56px; font-family: &quot;Noto Sans SC&quot;, &quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, &quot;Heiti SC&quot;, sans-serif;">
+        <div id="lineBox" style="display: none;">
+            <div id="lineBase" style="color: rgb(143, 163, 191);"></div>
+            <div id="lineClip"><div id="lineFill" style="color: rgb(110, 231, 242);"></div></div>
         </div>
         <div id="translation"></div>
         <div id="nextLine"></div>
-        <div id="interlude">♪ ♪ ♪</div>
+        <div id="interlude" class="pulse" style="display: block;">♪ ♪ ♪</div>
     </div>
     <div id="connDot"></div>
     <div id="settingsBtn">⚙</div>
@@ -209,8 +208,8 @@
             <label><input type="checkbox" id="showNext"> 显示下一句</label>
         </div>
         <div class="field">
-            <label>服务地址（手机 IP:端口）</label>
-            <input type="text" id="hostInput" placeholder="例如 192.168.1.5:8765">
+            <label>连接地址（门店号 = 走云端；IP:端口 = 局域网）</label>
+            <input type="text" id="hostInput" placeholder="门店号 或 192.168.1.5:8765">
             <button id="connectHost" style="margin-top:8px;width:100%;padding:9px;background:#6EE7F2;color:#07111F;border:none;border-radius:8px;font-size:14px;font-weight:bold;">连接</button>
         </div>
         <button id="closeSettings">完成</button>
@@ -290,42 +289,76 @@
     var reconnectTimer = null;
     var pollTimer = null;
     var pingTimer = null;
-    var HOST_KEY = 'wemew.display.host';
-    /** '' means same-origin (served by the app itself); otherwise "ip:port" of the phone. */
+    var cloudTimer = null;
+    var HOST_KEY = 'wemew.display.address';
+    var CLOUD_ROOM = 'wss://socket.wemew.com/websocket/bluetooth_box/';
+    var DISPLAY_ID_KEY = 'wemew.display.id';
+    /** '' = same-origin (served by the app); 'ip:port' = LAN; UUID = cloud room (barId). */
     var remoteHost = '';
+    var cloudBarId = '';
+    var displayId = '';
 
-    function hostParam() {
-        var match = window.location.search.match(/[?&]host=([^&]+)/);
-        return match ? decodeURIComponent(match[1]) : null;
+    function addressParam() {
+        var host = window.location.search.match(/[?&]host=([^&]+)/);
+        var bar = window.location.search.match(/[?&]barId=([^&]+)/);
+        var value = bar ? bar[1] : (host ? host[1] : null);
+        return value === null ? null : decodeURIComponent(value);
+    }
+
+    function classify(address) {
+        var value = (address || '').trim()
+                .replace(/^wss?:\/\/|^https?:\/\//, '').replace(/\/.*$/, '');
+        if (/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
+                .test(value)) {
+            cloudBarId = value;
+            remoteHost = '';
+        } else {
+            cloudBarId = '';
+            remoteHost = value;
+        }
     }
 
     function resolveHost() {
-        var fromUrl = hostParam();
+        var fromUrl = addressParam();
         if (fromUrl !== null && fromUrl.trim()) {
-            remoteHost = fromUrl.trim().replace(/^wss?:\/\/|^https?:\/\//, '').replace(/\/$/, '');
+            classify(fromUrl);
         } else {
-            try { remoteHost = window.localStorage.getItem(HOST_KEY) || ''; } catch (error) { }
+            try { classify(window.localStorage.getItem(HOST_KEY) || ''); } catch (error) { }
         }
-        if (!remoteHost && !window.location.host) {
-            // Opened as a local file without a host: fall back to any remembered address.
-            try { remoteHost = window.localStorage.getItem(HOST_KEY) || ''; } catch (error) { }
+        if (!remoteHost && !cloudBarId && !window.location.host) {
+            try { classify(window.localStorage.getItem(HOST_KEY) || ''); } catch (error) { }
+        }
+        try {
+            displayId = window.localStorage.getItem(DISPLAY_ID_KEY) || '';
+            if (!displayId) {
+                var hex = '0123456789ABCDEF';
+                displayId = 'DISPLAY';
+                for (var i = 0; i < 8; i++) {
+                    displayId += hex.charAt(Math.floor(Math.random() * 16));
+                }
+                window.localStorage.setItem(DISPLAY_ID_KEY, displayId);
+            }
+        } catch (error) {
+            displayId = 'DISPLAY' + new Date().getTime() % 100000000;
         }
     }
 
-    function wsBaseUrl() {
+    function wsUrl() {
+        if (cloudBarId) return CLOUD_ROOM + cloudBarId;
         if (!remoteHost) {
             return (window.location.protocol === 'https:' ? 'wss://' : 'ws://')
-                    + window.location.host;
+                    + window.location.host + '/ws';
         }
-        return 'ws://' + remoteHost;
+        return 'ws://' + remoteHost + '/ws';
     }
 
     function restBase() {
-        return remoteHost ? 'http://' + remoteHost : '';
+        return remoteHost && !cloudBarId ? 'http://' + remoteHost : '';
     }
 
     function rememberHost() {
-        try { window.localStorage.setItem(HOST_KEY, remoteHost); } catch (error) { }
+        var address = cloudBarId || remoteHost;
+        try { window.localStorage.setItem(HOST_KEY, address); } catch (error) { }
     }
 
     function reconnectAll() {
@@ -333,28 +366,41 @@
         if (reconnectTimer) { window.clearTimeout(reconnectTimer); reconnectTimer = null; }
         if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null; }
         if (pingTimer) { window.clearInterval(pingTimer); pingTimer = null; }
+        if (cloudTimer) { window.clearInterval(cloudTimer); cloudTimer = null; }
         anchor.ts = 0;
         connect();
     }
 
+    function sendCloudOnline() {
+        send({ type: 'online', sender: 'control_box',
+                data: { deviceId: displayId, timestamp: Date.now() } });
+    }
+
     function connect() {
         if (!window.WebSocket) {
-            setDot('#C9A227');
-            startPolling();
+            setDot(cloudBarId ? '#66788F' : '#C9A227');
+            if (!cloudBarId) startPolling();
             return;
         }
         try {
-            socket = new WebSocket(wsBaseUrl() + '/ws');
+            socket = new WebSocket(wsUrl());
         } catch (error) {
             scheduleReconnect();
             return;
         }
         socket.onopen = function () {
             setDot('#6EE7F2');
-            send({ v: PROTOCOL, type: 'hello', data: { protocol: PROTOCOL,
-                    client: { name: 'wemew-test-page', version: '1.0' } } });
+            if (cloudBarId) {
+                // Cloud room: announce as the display side and keep a 2 s heartbeat.
+                sendCloudOnline();
+                if (cloudTimer) window.clearInterval(cloudTimer);
+                cloudTimer = window.setInterval(sendCloudOnline, 2000);
+            } else {
+                send({ v: PROTOCOL, type: 'hello', data: { protocol: PROTOCOL,
+                        client: { name: 'wemew-test-page', version: '1.0' } } });
+            }
             if (pingTimer) window.clearInterval(pingTimer);
-            pingTimer = window.setInterval(sendPing, 2000);
+            pingTimer = window.setInterval(sendPing, 5000);
             sendPing();
         };
         socket.onmessage = function (event) {
@@ -435,6 +481,7 @@
         else if (frame.type === 'state') onStateData(frame.data, frame.ts);
         else if (frame.type === 'line') onLineData(frame.data);
         else if (frame.type === 'pong') onPong(frame);
+        // 'online' room heartbeats and any unknown types are ignored (cloud echo included).
     }
 
     function onTrackData(data, ts) {
@@ -760,17 +807,17 @@
         };
         var hostInput = document.getElementById('hostInput');
         var connectHost = document.getElementById('connectHost');
-        hostInput.value = remoteHost;
+        hostInput.value = cloudBarId || remoteHost;
         hostInput.onkeydown = function (event) {
             if (event.keyCode === 13) connectHost.onclick();
         };
         connectHost.onclick = function () {
-            var value = (hostInput.value || '').trim()
-                    .replace(/^wss?:\/\/|^https?:\/\//, '').replace(/\/$/, '');
-            remoteHost = value;
+            classify(hostInput.value || '');
             rememberHost();
             document.getElementById('settingsPanel').className = '';
-            SafeToastLocal(value ? '正在连接 ' + value : '已切回同源地址');
+            var target = cloudBarId || remoteHost;
+            SafeToastLocal(target ? '正在连接 ' + (cloudBarId ? '门店 ' + cloudBarId : target)
+                    : '已切回同源地址');
             reconnectAll();
         };
 
@@ -826,5 +873,6 @@
     frame();
 })();
 </script>
-</body>
-</html>
+
+
+</body></html>

@@ -46,8 +46,8 @@ public final class MainActivity extends AppCompatActivity {
     private TextView bindingStore;
     private TextView bindingDevice;
     private TextView bindingMeta;
-    private TextView trialStatus;
     private TextView webStatus;
+    private TextView cloudStatus;
     private LinearLayout webUrlRows;
     private TextView musicTitle;
     private TextView musicSource;
@@ -162,24 +162,26 @@ public final class MainActivity extends AppCompatActivity {
         bindingMeta = text("", 12, 0xFF66788F, false);
         bindingMeta.setPadding(0, dp(2), 0, 0);
         bindingCard.addView(bindingMeta);
-        trialStatus = text("", 12, 0xFFFFCA66, false);
-        trialStatus.setPadding(0, dp(2), 0, 0);
-        bindingCard.addView(trialStatus);
 
         // ---- 同步状态 ----
         LinearLayout syncCard = card();
         syncCard.addView(sectionLabel("同步状态"));
-        webStatus = text("", 14, 0xFF6EE7F2, true);
-        webStatus.setPadding(0, dp(8), 0, dp(4));
+        cloudStatus = text("", 14, 0xFF6EE7F2, true);
+        cloudStatus.setPadding(0, dp(8), 0, dp(2));
+        syncCard.addView(cloudStatus);
+        TextView cloudHint = text("云端经微喵门店房间转发，显示端只需门店号即可连接，不受手机 IP 变化影响。",
+                12, 0xFF74869D, false);
+        cloudHint.setLineSpacing(0f, 1.2f);
+        syncCard.addView(cloudHint);
+        TextView lanLabel = text("局域网直连（调试用）", 13, 0xFFA9B6C8, true);
+        lanLabel.setPadding(0, dp(10), 0, 0);
+        syncCard.addView(lanLabel);
+        webStatus = text("", 14, 0xFF6EE7F2, false);
+        webStatus.setPadding(0, dp(4), 0, dp(2));
         syncCard.addView(webStatus);
         webUrlRows = new LinearLayout(this);
         webUrlRows.setOrientation(LinearLayout.VERTICAL);
         syncCard.addView(webUrlRows);
-        TextView syncHint = text("在车机或电脑浏览器打开地址即可显示歌词；显示端可自行调节字号、颜色与字体。",
-                12, 0xFF74869D, false);
-        syncHint.setLineSpacing(0f, 1.2f);
-        syncHint.setPadding(0, dp(6), 0, 0);
-        syncCard.addView(syncHint);
 
         // ---- 歌词信息 ----
         LinearLayout lyricCard = card();
@@ -240,11 +242,22 @@ public final class MainActivity extends AppCompatActivity {
         }
         bindingMeta.setText(meta.toString());
         bindingMeta.setTextColor(checkFailed ? 0xFFFFCA66 : 0xFF66788F);
-        String trial = LicenseGate.trialSummary(this);
-        trialStatus.setText(trial == null ? "" : trial);
     }
 
     private void refreshSync() {
+        boolean cloudUp = WebSyncService.cloudConnected();
+        String barId = AppPreferences.boundBarId(this);
+        if (barId.isEmpty()) {
+            cloudStatus.setText("云端：未绑定，等待门店登记设备码");
+            cloudStatus.setTextColor(0xFFFFCA66);
+        } else if (cloudUp) {
+            cloudStatus.setText("云端：已连接门店房间 · 显示端 " + WebSyncService.cloudDisplayCount()
+                    + " 个");
+            cloudStatus.setTextColor(0xFF6EE7F2);
+        } else {
+            cloudStatus.setText("云端：连接中…（已绑定 " + barId + "）");
+            cloudStatus.setTextColor(0xFFFFCA66);
+        }
         boolean running = WebSyncService.isRunning();
         int port = WebSyncService.port();
         webStatus.setText(running

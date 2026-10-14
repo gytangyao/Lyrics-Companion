@@ -25,6 +25,11 @@ final class HttpCompat {
         return connection;
     }
 
+    /** TLS 1.2 factory for non-HTTP clients (the cloud WebSocket) on Android 4.4. */
+    static SSLSocketFactory tls12Factory() {
+        return new Tls12SocketFactory((SSLSocketFactory) SSLSocketFactory.getDefault());
+    }
+
     private static final class Tls12SocketFactory extends SSLSocketFactory {
         private final SSLSocketFactory delegate;
 

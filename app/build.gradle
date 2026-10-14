@@ -67,6 +67,8 @@ dependencies {
     // Embedded LAN web/WebSocket server for the lyric display; frozen 2017 release, zero
     // transitive dependencies, Java-7 bytecode, runs on API 19.
     implementation "org.nanohttpd:nanohttpd-websocket:2.3.1"
+    // Cloud room WebSocket client (wemew relay); no transitive dependencies, API 19 OK.
+    implementation "org.java-websocket:Java-WebSocket:1.5.7"
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.json:json:20240303"
 }

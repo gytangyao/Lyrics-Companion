@@ -67,7 +67,7 @@ final class DeviceIdentityStore {
         return identity == null ? null : identity.id;
     }
 
-    /** Trial anchor for {@link LicenseGate}; lazily fixed at first sight and never reset. */
+    /** Lazily-fixed anchor kept in the watermark blob; reserved for future server-side trials. */
     static synchronized long trialStartMs(Context context) {
         Identity identity = load(context);
         if (identity != null && identity.trialStartMs > 0L) return identity.trialStartMs;

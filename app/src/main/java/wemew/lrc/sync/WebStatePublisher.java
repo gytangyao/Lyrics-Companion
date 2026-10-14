@@ -25,6 +25,8 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
     private final WebSocketClients clients;
     private final CoverRegistry covers;
     private final String serverVersion;
+    /** Optional cloud-room leg; every pushed frame fans out to both transports. */
+    private volatile CloudSyncClient cloud;
     private final PublisherDiff.State diff = new PublisherDiff.State();
     /** Held so reference equality against the previous timeline stays meaningful. */
     private LrcTimeline previousTimeline = LrcTimeline.EMPTY;
@@ -64,6 +66,11 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
         thread.start();
         handler = new Handler(thread.getLooper());
         handler.post(this::tick);
+    }
+
+    /** Attaches the cloud leg; frames published from now on reach both transports. */
+    void setCloud(CloudSyncClient cloudLeg) {
+        cloud = cloudLeg;
     }
 
     void stop() {
@@ -109,20 +116,26 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
             WebProtocolCodec.TrackPayload payload = payload(snapshot, timeline, speed,
                     liveMode, artVersion);
             lastTrackJson = WebProtocolCodec.track(nowWall, payload);
-            clients.broadcast(lastTrackJson);
+            fanOut(lastTrackJson);
             lastPushSummary = "track " + snapshot.title;
         }
         if (decision.state) {
             lastStateJson = WebProtocolCodec.state(nowWall, snapshot.active, snapshot.playing,
                     snapshot.positionMs, speed, snapshot.durationMs, true);
-            clients.broadcast(lastStateJson);
+            fanOut(lastStateJson);
             if (!decision.track) lastPushSummary = "state @" + snapshot.positionMs + "ms";
         }
         if (decision.line && liveMode) {
-            clients.broadcast(WebProtocolCodec.line(nowWall, snapshot.lyrics.lyric,
+            fanOut(WebProtocolCodec.line(nowWall, snapshot.lyrics.lyric,
                     snapshot.lyrics.nextLyric, snapshot.lyrics.translatedLyric));
             lastPushSummary = "line " + snapshot.lyrics.lyric;
         }
+    }
+
+    private void fanOut(String json) {
+        clients.broadcast(json);
+        CloudSyncClient cloudLeg = cloud;
+        if (cloudLeg != null) cloudLeg.send(json);
     }
 
     private WebProtocolCodec.TrackPayload payload(MusicSnapshot snapshot, LrcTimeline timeline,
