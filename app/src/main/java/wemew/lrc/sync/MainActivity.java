@@ -47,6 +47,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextView bindingMeta;
     private TextView cloudStatus;
     private TextView cloudPush;
+    private TextView wesingStatus;
     private TextView musicTitle;
     private TextView musicSource;
     private TextView lyricDetail;
@@ -171,6 +172,9 @@ public final class MainActivity extends AppCompatActivity {
         cloudPush = text("", 12, 0xFF7A7FA5, false);
         cloudPush.setPadding(0, dp(4), 0, 0);
         syncCard.addView(cloudPush);
+        wesingStatus = text("", 13, 0xFFADABF2, false);
+        wesingStatus.setPadding(0, dp(6), 0, 0);
+        syncCard.addView(wesingStatus);
         // ---- 歌词信息 ----
         LinearLayout lyricCard = card();
         lyricCard.addView(sectionLabel("歌词信息"));
@@ -268,6 +272,13 @@ public final class MainActivity extends AppCompatActivity {
         }
         String push = WebSyncService.pushSummary();
         cloudPush.setText(push == null || push.isEmpty() ? "" : "最近推送：" + push);
+        boolean wesingEnabled = WeSingLyricReader.enabled(this);
+        boolean wesingReading = WeSingLyricReader.reading();
+        String identity = WeSingLyricReader.lastIdentity();
+        wesingStatus.setText(!wesingEnabled ? "全民K歌：未启用无障碍读取（权限卡可开启）"
+                : wesingReading ? "全民K歌：读取中" + (identity.isEmpty() ? "" : " · " + identity)
+                : "全民K歌：已启用，等待演唱");
+        wesingStatus.setTextColor(wesingReading ? 0xFFF40861 : 0xFFADABF2);
     }
 
     private void refreshLyric() {
@@ -325,6 +336,10 @@ public final class MainActivity extends AppCompatActivity {
         permissionRows.removeAllViews();
         if (!hasNotificationAccess()) {
             addPermissionRow(permissionRows, "音乐读取权限", true, v -> openNotificationAccess());
+        }
+        if (!WeSingLyricReader.enabled(this)) {
+            addPermissionRow(permissionRows, "全民K歌读取", false,
+                    v -> openAccessibilitySettings());
         }
         boolean postNotifications = Build.VERSION.SDK_INT < 33
                 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -617,6 +632,11 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
+    }
+
+    private void openAccessibilitySettings() {
+        if (startSettingsActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))) return;
+        SafeToast.show(this, "无法打开无障碍设置，请手动开启「全民K歌歌词读取」", Toast.LENGTH_LONG);
     }
 
     private void openApplicationDetails() {
