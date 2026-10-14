@@ -10,11 +10,11 @@ def releaseSigningReady = releaseStoreFile && releaseStorePassword
         && releaseKeyAlias && releaseKeyPassword
 
 android {
-    namespace "com.zuoqirun.lyricscompanion"
+    namespace "wemew.lrc.sync"
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.zuoqirun.lyricscompanion"
+        applicationId "wemew.lrc.sync"
         minSdk 19
         targetSdk 36
         versionCode Integer.parseInt(System.getenv("APP_VERSION_CODE") ?: "1")
@@ -53,6 +53,9 @@ dependencies {
     // Last releases in these lines that still support Android 4.4 (API 19).
     implementation "androidx.appcompat:appcompat:1.6.1"
     implementation "com.google.android.material:material:1.12.0"
+    // Embedded LAN web/WebSocket server for the lyric display; frozen 2017 release, zero
+    // transitive dependencies, Java-7 bytecode, runs on API 19.
+    implementation "org.nanohttpd:nanohttpd-websocket:2.3.1"
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.json:json:20240303"
 }

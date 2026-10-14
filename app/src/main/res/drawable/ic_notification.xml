@@ -1,0 +1,19 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 状态栏小白图标：猫头 + 歌词条（仅白色/透明度） -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M8.4,7.8 L7,2.8 L12,5.2 Z" />
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M15.6,7.8 L17,2.8 L12,5.2 Z" />
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M6.6,9.4 a5.4,5.4 0 1 1,10.8,0 a5.4,5.4 0 1 1,-10.8,0 Z" />
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="1.6"
+        android:strokeLineCap="round" android:pathData="M4,19.2 h9.6" />
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="1.6"
+        android:strokeLineCap="round" android:pathData="M4,22 h6.4" />
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="1.6"
+        android:strokeLineCap="round" android:pathData="M16.4,19 h3.6 M18.6,15.4 a2.2,2.2 0 1 0,0.01,0 Z" />
+</vector>

@@ -3,8 +3,22 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:fillColor="#07111F" android:pathData="M0,0h108v108h-108z" />
-    <path android:fillColor="#6EE7F2" android:pathData="M28,25h52a8,8 0,0 1,8 8v30a8,8 0,0 1,-8 8h-27l-15,13v-13h-10a8,8 0,0 1,-8 -8v-30a8,8 0,0 1,8 -8z" />
-    <path android:fillColor="#07111F" android:pathData="M36,40h36v6h-36zM36,52h29v6h-29z" />
-    <path android:fillColor="#FFCA66" android:pathData="M36,64h20v5h-20z" />
+    <!-- 微喵歌词同步：深夜蓝底 + 白猫头 + 歌词条 + 音符 -->
+    <path android:fillColor="#0B1524" android:pathData="M0,0h108v108h-108z" />
+    <!-- 猫耳（与头部同色重叠成剪影） -->
+    <path android:fillColor="#F2F7FF" android:pathData="M39,33 L33,13 L54,24 Z" />
+    <path android:fillColor="#F2F7FF" android:pathData="M69,33 L75,13 L54,24 Z" />
+    <!-- 猫头 -->
+    <path android:fillColor="#F2F7FF" android:pathData="M35,41 a19,19 0 1 1,38,0 a19,19 0 1 1,-38,0 Z" />
+    <!-- 眼睛与鼻子 -->
+    <path android:fillColor="#0B1524" android:pathData="M47,37.3 a2.7,2.7 0 1 0,0.01,0 Z" />
+    <path android:fillColor="#0B1524" android:pathData="M61,37.3 a2.7,2.7 0 1 0,0.01,0 Z" />
+    <path android:fillColor="#0B1524" android:pathData="M54,46 L51.4,50.4 L56.6,50.4 Z" />
+    <!-- 歌词条（当前行长、下一行短） -->
+    <path android:fillColor="#6EE7F2" android:pathData="M26,67 h44 a4,4 0 0 1 4,4 a4,4 0 0 1 -4,4 h-44 a4,4 0 0 1 -4,-4 a4,4 0 0 1 4,-4 Z" />
+    <path android:fillColor="#4FA9C4" android:pathData="M25.5,79 h31 a3.5,3.5 0 0 1 3.5,3.5 a3.5,3.5 0 0 1 -3.5,3.5 h-31 a3.5,3.5 0 0 1 -3.5,-3.5 a3.5,3.5 0 0 1 3.5,-3.5 Z" />
+    <!-- 八分音符：符头 + 符干 + 符尾 -->
+    <path android:fillColor="#FFCA66" android:pathData="M84,81 a5,4 0 1 0,0.01,0 Z" />
+    <path android:fillColor="#FFCA66" android:pathData="M87.5,64 h3 v20 h-3 Z" />
+    <path android:fillColor="#FFCA66" android:pathData="M90.5,64 Q100,67 95,79 Q98,69 90.5,67.5 Z" />
 </vector>
