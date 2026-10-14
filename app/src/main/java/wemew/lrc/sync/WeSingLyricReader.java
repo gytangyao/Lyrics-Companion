@@ -41,6 +41,7 @@ public final class WeSingLyricReader extends AccessibilityService {
     private long lastPositionMs = -1L;
     private long lastDurationMs = -1L;
     private String songKey = "";
+    private String lastArtist = "";
     /** Lyric lines in start order: text → clock value when the line reached the ladder top. */
     private final LinkedHashMap<String, Long> lineStarts = new LinkedHashMap<>();
     /** The current ladder-top line; a change means the previous line ended and this started. */
@@ -83,19 +84,22 @@ public final class WeSingLyricReader extends AccessibilityService {
         // Ordered full-tree texts feed the title and clock extraction.
         List<String> ordered = new ArrayList<>(64);
         walkOrdered(root, ordered, 0);
-        // Geometry walk: the lyric ladder (verified: rows spaced ~101 px inside the vertical
-        // band, chrome lives outside it; the ladder TOP row is the line being sung).
+
+        Clock clock = clockFrom(ordered);
+        // Gate on the singing screen: only it carries a running m:ss clock AND a lyric
+        // ladder. Settings pages / song lists have neither; 原唱/伴唱 badges can toggle.
+        if (clock.positionMs < 0L) return;
         List<Row> band = new ArrayList<>(24);
         walkLadder(root, band, 0);
         List<Row> ladder = extractLadder(band);
+        if (ladder.isEmpty()) return;
 
-        Clock clock = clockFrom(ordered);
-        if (clock.positionMs < 0L) return;
         String title = titleFrom(ordered);
         boolean newSong = !TextUtils.equals(title, lastTitle)
                 || (lastPositionMs >= 0L && clock.positionMs < lastPositionMs - 3_000L);
         if (newSong) {
             lineStarts.clear();
+            lastArtist = "";
             songKey = title + "/" + clock.durationMs;
             lastDurationMs = -1L;
             if (!TextUtils.isEmpty(lastTitle) && !TextUtils.equals(title, lastTitle)) {
@@ -107,36 +111,54 @@ public final class WeSingLyricReader extends AccessibilityService {
         lastDurationMs = clock.durationMs;
         lastTitle = title;
 
-        // The karaoke view exposes the full ladder but never scrolls it and never marks the
-        // current line through node bounds (40-frame proof: heights stay 54/71 all song —
-        // the enlarged current line is canvas-drawn). So: collect every ladder row in tree
-        // order, spread the starts evenly over the song, and let the clock pick the line.
         for (Row row : ladder) {
             if (!lineStarts.containsKey(row.text)) {
                 lineStarts.put(row.text, -1L);
             }
         }
-        List<String> orderedLines = new ArrayList<>(lineStarts.keySet());
-        long spanMs = lastDurationMs > 0L ? lastDurationMs
-                : Math.max(30_000L, clock.positionMs + 30_000L);
-        LrcTimeline timeline = LrcTimeline.EMPTY;
-        if (!orderedLines.isEmpty()) {
-            long interval = Math.max(1000L, spanMs / orderedLines.size());
-            List<LrcTimeline.Line> lines = new ArrayList<>(orderedLines.size());
-            for (int i = 0; i < orderedLines.size(); i++) {
-                lines.add(new LrcTimeline.Line(i * interval, interval, orderedLines.get(i)));
-            }
-            timeline = LrcTimeline.fromTimedLines(lines);
-        }
-        String currentLine = timeline.isEmpty() ? "" : timeline.at(clock.positionMs).lyric;
+
+        // Extract artist from the tree (verified pattern: "歌手名/演唱者" after the duration,
+        // or plain text near the title). The catalog match needs title + artist together.
+        String artist = artistFrom(ordered, title);
+        lastArtist = artist;
 
         MusicPlaybackData data = new MusicPlaybackData(
-                "", title == null ? "" : title, "", null, "", "",
+                "", title == null ? "" : title, artist == null ? "" : artist,
+                null, "", "",
                 lastDurationMs > 0L ? lastDurationMs : -1L,
                 true, playing ? MusicPlaybackData.STATE_PLAYING : MusicPlaybackData.STATE_PAUSED,
                 clock.positionMs, SystemClock.elapsedRealtime(), 1f,
-                !currentLine.isEmpty(), currentLine, timeline);
+                false, "", LrcTimeline.EMPTY);
         MusicStateStore.update(this, "wesing", "全民K歌", "com.tencent.karaoke", data);
+    }
+
+    /**
+     * The artist sits in the tree near the title/duration (verified: "心落凡尘/刘芝怡",
+     * "蒙小哥" as standalone text). Look for a slash-separated pair or a short text after
+     * the duration clock that isn't chrome.
+     */
+    private String artistFrom(List<String> ordered, String title) {
+        if (!TextUtils.isEmpty(lastArtist)) return lastArtist;
+        for (int i = 0; i < ordered.size(); i++) {
+            String text = ordered.get(i).trim();
+            // Slash pair "词曲/演唱" pattern
+            if (text.matches(".{1,20}/.{1,20}") && !text.equals(title)) {
+                return text.substring(text.indexOf('/') + 1);
+            }
+        }
+        // Short standalone text right after the duration that isn't chrome or the title
+        for (int i = 0; i < ordered.size() - 1; i++) {
+            if (ordered.get(i).trim().matches("\\d{1,2}:\\d{2}")) {
+                for (int j = i + 1; j < Math.min(i + 4, ordered.size()); j++) {
+                    String text = ordered.get(j).trim();
+                    if (text.isEmpty() || WeSingChrome.isChrome(text)) continue;
+                    if (text.matches("[+\\d\\s.%/·]+")) continue;
+                    if (text.equals(title) || text.contains(title)) continue;
+                    if (text.length() <= 12) return text;
+                }
+            }
+        }
+        return "";
     }
 
     /** A candidate ladder row: a text node with its screen geometry. */
