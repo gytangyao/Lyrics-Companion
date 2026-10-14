@@ -6,27 +6,20 @@ import android.os.HandlerThread;
 import android.os.SystemClock;
 import android.util.Log;
 
-import org.json.JSONObject;
-
 /**
- * Polls {@link MusicStateStore} on a light tick and broadcasts protocol messages through the
- * diff engine: a full {@code track} frame on track/timeline changes, a cheap {@code state}
- * anchor around once a second (or immediately on seek/pause/speed change), and a {@code line}
- * frame whenever the player's live lyric text changes. Clients interpolate between anchors,
- * which keeps karaoke smooth at a fraction of the traffic.
+ * Polls {@link MusicStateStore} on a light tick and pushes protocol frames into the cloud
+ * room: a full {@code track} frame on track/timeline changes, a cheap {@code state} anchor
+ * around once a second (or immediately on seek/pause/speed change), and a {@code line} frame
+ * whenever the player's live lyric text changes. Displays interpolate between anchors, which
+ * keeps karaoke smooth at a fraction of the traffic.
  */
-final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.RestSource {
+final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
     static final long DRIFT_THRESHOLD_MS = 700L;
     static final long STATE_INTERVAL_MS = 1_000L;
     private static final long TICK_MS = 500L;
     private static final String TAG = "WebStatePublisher";
 
     private final Context context;
-    private final WebSocketClients clients;
-    private final CoverRegistry covers;
-    private final String serverVersion;
-    /** Optional cloud-room leg; every pushed frame fans out to both transports. */
-    private volatile CloudSyncClient cloud;
     private final PublisherDiff.State diff = new PublisherDiff.State();
     /** Held so reference equality against the previous timeline stays meaningful. */
     private LrcTimeline previousTimeline = LrcTimeline.EMPTY;
@@ -39,6 +32,12 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
     private volatile long lastTickElapsedMs;
     /** Human-readable summary of the last pushed frame, for the settings page. */
     private volatile String lastPushSummary = "";
+    /** Cloud-room leg; every pushed frame fans out through it. */
+    private volatile CloudSyncClient cloud;
+
+    WebStatePublisher(Context context) {
+        this.context = context.getApplicationContext();
+    }
 
     /** How long since the last publish tick; grows when the thread is wedged. */
     long tickAgeMs() {
@@ -48,14 +47,6 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
 
     String lastPushSummary() {
         return lastPushSummary;
-    }
-
-    WebStatePublisher(Context context, WebSocketClients clients, CoverRegistry covers,
-                      String serverVersion) {
-        this.context = context.getApplicationContext();
-        this.clients = clients;
-        this.covers = covers;
-        this.serverVersion = serverVersion;
     }
 
     void start() {
@@ -68,17 +59,17 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
         handler.post(this::tick);
     }
 
-    /** Attaches the cloud leg; frames published from now on reach both transports. */
-    void setCloud(CloudSyncClient cloudLeg) {
-        cloud = cloudLeg;
-    }
-
     void stop() {
         if (thread != null) {
             thread.quitSafely();
             thread = null;
             handler = null;
         }
+    }
+
+    /** Attaches the cloud leg; frames published from now on reach the room. */
+    void setCloud(CloudSyncClient cloudLeg) {
+        cloud = cloudLeg;
     }
 
     private void tick() {
@@ -112,9 +103,8 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
                 snapshot.playing, speed, snapshot.positionMs, liveLine, nowElapsed,
                 DRIFT_THRESHOLD_MS, STATE_INTERVAL_MS);
         if (decision.track) {
-            int artVersion = covers.update(trackKey, snapshot.albumArt);
             WebProtocolCodec.TrackPayload payload = payload(snapshot, timeline, speed,
-                    liveMode, artVersion);
+                    liveMode);
             lastTrackJson = WebProtocolCodec.track(nowWall, payload);
             fanOut(lastTrackJson);
             lastPushSummary = "track " + snapshot.title;
@@ -133,13 +123,12 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
     }
 
     private void fanOut(String json) {
-        clients.broadcast(json);
         CloudSyncClient cloudLeg = cloud;
         if (cloudLeg != null) cloudLeg.send(json);
     }
 
     private WebProtocolCodec.TrackPayload payload(MusicSnapshot snapshot, LrcTimeline timeline,
-                                                  float speed, boolean liveMode, int artVersion) {
+                                                  float speed, boolean liveMode) {
         WebProtocolCodec.TrackPayload payload = new WebProtocolCodec.TrackPayload();
         payload.active = snapshot.active;
         payload.playing = snapshot.playing;
@@ -155,24 +144,20 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
         payload.liveMode = liveMode;
         payload.lyricSourceName = snapshot.lyricSourceName;
         payload.liveLine = liveMode ? snapshot.lyrics.lyric : "";
-        payload.hasArt = snapshot.albumArt != null;
-        payload.artVersion = artVersion;
+        // No cover transport exists without a local HTTP leg; reserved in the protocol.
+        payload.hasArt = false;
+        payload.artVersion = 0;
         return payload;
     }
 
-    @Override public String welcomeJson() {
-        return WebProtocolCodec.welcome(System.currentTimeMillis(), serverVersion);
-    }
-
     @Override public String trackJson() {
-        // Always freshly built: the connect snapshot must reflect "now", never a frame cached
-        // when the track first appeared (a stale position anchor makes a joining client jump).
+        // Always freshly built: the snapshot must reflect "now", never a cached frame (a
+        // stale position anchor makes a joining display jump).
         MusicSnapshot snapshot =
                 MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(context));
-        boolean liveMode = snapshot.liveLyricActive;
         WebProtocolCodec.TrackPayload payload = payload(snapshot,
-                MusicStateStore.currentTimeline(), MusicStateStore.playbackSpeed(), liveMode,
-                covers.version());
+                MusicStateStore.currentTimeline(), MusicStateStore.playbackSpeed(),
+                snapshot.liveLyricActive);
         lastTrackJson = WebProtocolCodec.track(System.currentTimeMillis(), payload);
         return lastTrackJson;
     }
@@ -184,33 +169,5 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
                 snapshot.playing, snapshot.positionMs, MusicStateStore.playbackSpeed(),
                 snapshot.durationMs, true);
         return lastStateJson;
-    }
-
-    @Override public String stateSnapshot() {
-        MusicSnapshot snapshot =
-                MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(context));
-        LrcTimeline timeline = MusicStateStore.currentTimeline();
-        float speed = MusicStateStore.playbackSpeed();
-        boolean liveMode = snapshot.liveLyricActive;
-        JSONObject trackData = snapshot.active
-                ? WebProtocolCodec.trackData(payload(snapshot, timeline, speed, liveMode,
-                        covers.version()))
-                : null;
-        JSONObject stateData = WebProtocolCodec.stateData(snapshot.active, snapshot.playing,
-                snapshot.positionMs, speed, snapshot.durationMs, true);
-        return WebProtocolCodec.restSnapshot(trackData, stateData);
-    }
-
-    @Override public String trackSnapshot() {
-        MusicSnapshot snapshot =
-                MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(context));
-        if (!snapshot.active) return "{\"v\":1,\"track\":null}";
-        return "{\"v\":1,\"track\":" + WebProtocolCodec.trackData(payload(snapshot,
-                MusicStateStore.currentTimeline(), MusicStateStore.playbackSpeed(),
-                snapshot.liveLyricActive, covers.version())).toString() + "}";
-    }
-
-    @Override public byte[] coverBytes(int requestedVersion) {
-        return covers.bytes(requestedVersion);
     }
 }

@@ -37,8 +37,15 @@ final class CloudSyncClient {
     /** Snapshot rate limit while displays keep heart-beating every 2 s. */
     private static final long SNAPSHOT_MIN_INTERVAL_MS = 1_500L;
 
+    /** Fresh frames for a display that just joined the room. */
+    interface SnapshotSource {
+        String trackJson();
+
+        String stateJson();
+    }
+
     private final Context context;
-    private final WebSyncSocket.Hooks hooks;
+    private final SnapshotSource hooks;
     private final HandlerThread thread;
     private final Handler handler;
     private final Map<String, Long> displayLastSeenElapsed = new HashMap<>();
@@ -47,7 +54,7 @@ final class CloudSyncClient {
     private volatile boolean stopped;
     private volatile long lastSnapshotPushElapsed;
 
-    CloudSyncClient(Context context, WebSyncSocket.Hooks hooks) {
+    CloudSyncClient(Context context, SnapshotSource hooks) {
         this.context = context.getApplicationContext();
         this.hooks = hooks;
         thread = new HandlerThread("CloudSync");

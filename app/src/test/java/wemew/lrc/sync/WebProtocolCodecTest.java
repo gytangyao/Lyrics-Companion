@@ -107,13 +107,10 @@ public class WebProtocolCodecTest {
         assertTrue(data.getBoolean("track"));
     }
 
-    @org.junit.Test public void restSnapshotAllowsNullTrack() throws Exception {
+    @org.junit.Test public void stateDataIsReusable() throws Exception {
+        // trackData/stateData are the building blocks of the track/state frames.
         JSONObject state = WebProtocolCodec.stateData(false, false, 0, 1f, -1, false);
-        String json = WebProtocolCodec.restSnapshot(null, state);
-        JSONObject root = new JSONObject(json);
-        assertEquals(1, root.getInt("v"));
-        assertTrue(root.isNull("track"));
-        assertFalse(root.getJSONObject("state").getBoolean("active"));
+        assertFalse(state.getBoolean("active"));
     }
 
     @org.junit.Test public void pongEchoesClientTimestamp() throws Exception {

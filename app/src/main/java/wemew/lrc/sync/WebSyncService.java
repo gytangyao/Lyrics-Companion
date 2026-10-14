@@ -7,60 +7,40 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageInfo;
-import android.content.pm.PackageManager;
-import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
-import android.text.format.Formatter;
 
 import androidx.core.app.NotificationCompat;
-import androidx.core.app.ServiceCompat;
 import androidx.core.content.ContextCompat;
 
-import java.io.IOException;
-import java.net.Inet4Address;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Enumeration;
-import java.util.List;
-
-import fi.iki.elonen.NanoHTTPD;
-
 /**
- * Foreground service hosting the LAN web server. Keeps the process alive on aggressive
- * automotive ROMs and shows the reachable URL so the user can type it into the head unit.
+ * Foreground service hosting the cloud sync stack: the lyric publisher fans protocol frames
+ * into the wemew store room ({@link CloudSyncClient}), and the store binding poller keeps the
+ * room address fresh. There is no local network listener — sync only ever goes through the
+ * cloud relay, so display clients need nothing but the store's barId.
  */
 public final class WebSyncService extends Service {
     private static final String CHANNEL_ID = "web_sync";
     private static final int NOTIFICATION_ID = 41;
-    /** Binding-state changes ask the service to re-run the license gate. */
+    /** Binding-state changes ask the service to re-target the cloud room. */
     static final String ACTION_REEVALUATE = "wemew.lrc.sync.action.REEVALUATE";
-    /** NanoHTTPD socket read timeout; see {@link #startServer()} for why it is this long. */
-    private static final int SOCKET_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+    /** If a publish tick stalls this long the publisher is rebuilt and the stacks logged. */
+    private static final long WATCHDOG_STALL_MS = 20_000L;
+    private static final long WATCHDOG_INTERVAL_MS = 15_000L;
 
     private static volatile WebSyncService instance;
 
-    private WebSocketClients clients;
-    private CoverRegistry covers;
     private WebStatePublisher publisher;
-    private WebDisplayServer server;
     private StoreBindingClient bindingClient;
     private CloudSyncClient cloudSync;
     private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
-    /** If a publish tick stalls this long the whole stack is rebuilt and the stacks logged. */
-    private static final long WATCHDOG_STALL_MS = 20_000L;
-    private static final long WATCHDOG_INTERVAL_MS = 15_000L;
 
     private final Runnable watchdog = new Runnable() {
         @Override public void run() {
             WebStatePublisher current = publisher;
-            if (current != null && server != null
-                    && current.tickAgeMs() > WATCHDOG_STALL_MS) {
+            if (current != null && current.tickAgeMs() > WATCHDOG_STALL_MS) {
                 recoverFromStall();
             }
             watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS);
@@ -76,36 +56,8 @@ public final class WebSyncService extends Service {
         }
     }
 
-    static void stop(Context context) {
-        context.stopService(new Intent(context, WebSyncService.class));
-    }
-
     static boolean isRunning() {
         return instance != null;
-    }
-
-    /** Actual listening port, or 0 when the server is not running. */
-    static int port() {
-        WebSyncService service = instance;
-        return service == null || service.server == null
-                ? 0 : service.server.getListeningPort();
-    }
-
-    static int clientCount() {
-        WebSyncService service = instance;
-        return service == null || service.clients == null ? 0 : service.clients.size();
-    }
-
-    static java.util.List<WebSyncSocket> clientSockets() {
-        WebSyncService service = instance;
-        return service == null || service.clients == null
-                ? java.util.Collections.emptyList() : service.clients.list();
-    }
-
-    static String pushSummary() {
-        WebSyncService service = instance;
-        return service == null || service.publisher == null
-                ? "" : service.publisher.lastPushSummary();
     }
 
     static boolean cloudConnected() {
@@ -119,60 +71,27 @@ public final class WebSyncService extends Service {
                 : service.cloudSync.onlineDisplays();
     }
 
-    /** Best-effort LAN URLs for the settings page; empty when the server is not running. */
-    static List<String> lanUrls() {
+    static String pushSummary() {
         WebSyncService service = instance;
-        if (service == null || service.server == null) return Collections.emptyList();
-        int port = service.server.getListeningPort();
-        List<String> urls = new ArrayList<>();
-        try {
-            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
-            while (interfaces != null && interfaces.hasMoreElements()) {
-                NetworkInterface network = interfaces.nextElement();
-                if (!network.isUp() || network.isLoopback()) continue;
-                Enumeration<InetAddress> addresses = network.getInetAddresses();
-                while (addresses.hasMoreElements()) {
-                    InetAddress address = addresses.nextElement();
-                    if (!(address instanceof Inet4Address) || address.isLoopbackAddress()) continue;
-                    urls.add("http://" + address.getHostAddress() + ":" + port);
-                }
-            }
-        } catch (Throwable ignored) { }
-        if (urls.isEmpty()) {
-            // Wi-Fi lock is not held; the manager still knows the last AP address on most ROMs.
-            try {
-                WifiManager wifi = (WifiManager) service.getApplicationContext()
-                        .getSystemService(WIFI_SERVICE);
-                if (wifi != null) {
-                    int address = wifi.getConnectionInfo().getIpAddress();
-                    if (address != 0) {
-                        urls.add("http://" + Formatter.formatIpAddress(address) + ":" + port);
-                    }
-                }
-            } catch (Throwable ignored) { }
-        }
-        return urls;
+        return service == null || service.publisher == null
+                ? "" : service.publisher.lastPushSummary();
     }
 
     @Override public void onCreate() {
         super.onCreate();
         instance = this;
-        clients = new WebSocketClients();
-        covers = new CoverRegistry();
-        publisher = new WebStatePublisher(this, clients, covers, versionName());
         // Binding always runs; a new barId re-targets the cloud room.
         bindingClient = new StoreBindingClient(this);
         bindingClient.start();
+        publisher = new WebStatePublisher(this);
         cloudSync = new CloudSyncClient(this, publisher);
         cloudSync.applyBarId(AppPreferences.boundBarId(this));
-        startServer();
         publisher.start();
         publisher.setCloud(cloudSync);
         startInForeground();
         watchdogHandler.removeCallbacks(watchdog);
         watchdogHandler.postDelayed(watchdog, WATCHDOG_INTERVAL_MS);
-        DiagnosticLog.record(this, "WebSync", "service started port="
-                + (server == null ? -1 : server.getListeningPort()));
+        DiagnosticLog.record(this, "WebSync", "cloud sync service started");
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -183,10 +102,24 @@ public final class WebSyncService extends Service {
         return START_STICKY;
     }
 
+    @Override public void onDestroy() {
+        instance = null;
+        watchdogHandler.removeCallbacks(watchdog);
+        if (cloudSync != null) cloudSync.stop();
+        if (bindingClient != null) bindingClient.stop();
+        if (publisher != null) publisher.stop();
+        DiagnosticLog.record(this, "WebSync", "cloud sync service stopped");
+        super.onDestroy();
+    }
+
+    @Override public IBinder onBind(Intent intent) {
+        return null;
+    }
+
     /**
-     * The publisher tick is the heartbeat of the whole stack. When it stalls past the
-     * threshold, every client is already frozen; rather than staying wedged, capture every
-     * thread stack (the root cause goes into the diagnostic log) and rebuild the server.
+     * The publisher tick is the heartbeat of the sync stack. When it stalls, every display is
+     * already frozen; capture every thread stack (the root cause goes into the diagnostic log)
+     * and rebuild the publisher instead of staying wedged.
      */
     private void recoverFromStall() {
         try {
@@ -204,56 +137,10 @@ public final class WebSyncService extends Service {
                     "publisher stalled " + publisher.tickAgeMs() + "ms; rebuilding. stacks:\n"
                             + stacks);
         } catch (Throwable ignored) { }
-        if (publisher != null) publisher.stop();
-        if (server != null) {
-            server.stop();
-            server = null;
-        }
-        startServer();
         if (publisher != null) publisher.start();
     }
 
-    @Override public void onDestroy() {
-        instance = null;
-        watchdogHandler.removeCallbacks(watchdog);
-        if (cloudSync != null) cloudSync.stop();
-        if (bindingClient != null) bindingClient.stop();
-        if (publisher != null) publisher.stop();
-        if (server != null) {
-            server.stop();
-            server = null;
-        }
-        DiagnosticLog.record(this, "WebSync", "server stopped");
-        super.onDestroy();
-    }
-
-    @Override public IBinder onBind(Intent intent) {
-        return null;
-    }
-
-    private void startServer() {
-        int first = WebProtocol.DEFAULT_PORT;
-        for (int candidate = first; candidate < first + 10; candidate++) {
-            WebDisplayServer candidateServer = new WebDisplayServer(candidate, this, clients,
-                    publisher, publisher);
-            try {
-                // A web socket rides the HTTP session thread, so NanoHTTPD's socket read
-                // timeout is also the web-socket idle limit. SOCKET_READ_TIMEOUT (5 s) killed
-                // idle display clients every 5 seconds; 10 minutes lets the client's 5-second
-                // application pings keep the read alive while still reaping dead HTTP peers.
-                candidateServer.start(SOCKET_IDLE_TIMEOUT_MS, false);
-                server = candidateServer;
-                return;
-            } catch (IOException error) {
-                candidateServer.stop();
-            }
-        }
-        DiagnosticLog.record(this, "WebSync", "no free port in " + first + ".." + (first + 9));
-    }
-
-    // The manifest declares android:foregroundServiceType="specialUse" on this service; lint's
-    // ForegroundServiceType check cannot see through ServiceCompat, so the known-good call is
-    // suppressed here.
+    // The manifest declares the specialUse type; lint cannot see through ServiceCompat.
     @android.annotation.SuppressLint("ForegroundServiceType")
     private void startInForeground() {
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
@@ -265,7 +152,7 @@ public final class WebSyncService extends Service {
         }
         Notification notification = buildNotification();
         if (Build.VERSION.SDK_INT >= 30) {
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification,
+            androidx.core.app.ServiceCompat.startForeground(this, NOTIFICATION_ID, notification,
                     android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         } else {
             startForeground(NOTIFICATION_ID, notification);
@@ -274,10 +161,9 @@ public final class WebSyncService extends Service {
 
     private Notification buildNotification() {
         boolean cloudUp = cloudSync != null && cloudSync.connected();
-        String text = cloudUp
-                ? "云端已连接 · " + primaryUrl()
+        String text = cloudUp ? "云端已连接门店房间"
                 : (AppPreferences.boundBarId(this).isEmpty()
-                        ? "等待门店登记设备码" : primaryUrl());
+                        ? "等待门店登记设备码" : "云端连接中…");
         Intent open = new Intent(this, MainActivity.class);
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0, open,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -289,19 +175,5 @@ public final class WebSyncService extends Service {
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .build();
-    }
-
-    private String primaryUrl() {
-        List<String> urls = lanUrls();
-        return urls.isEmpty() ? getString(R.string.service_notification_title) : urls.get(0);
-    }
-
-    private String versionName() {
-        try {
-            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
-            return info.versionName == null ? "" : info.versionName;
-        } catch (PackageManager.NameNotFoundException error) {
-            return "";
-        }
     }
 }

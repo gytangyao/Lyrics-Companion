@@ -1,32 +1,25 @@
 # 微喵歌词同步 · Web 协议规范（v1）
 
-手机端 App（`wemew.lrc.sync`）内嵌一个 HTTP + WebSocket 服务端，向局域网内任意浏览器
-显示端推送歌词状态。**本协议是对外契约**：仓库中的 `web-test-client/` 只是参考实现，
-未来任何通用显示端都应按本文档实现。
+手机端 App（`wemew.lrc.sync`）把歌词状态持续推送到**微喵云门店房间**，任意浏览器
+显示端连入同一房间即可显示歌词。**本协议是对外契约**：仓库中的 `web-test-client/`
+只是参考实现，未来任何通用显示端都应按本文档实现。
 
-- 传输：单端口，默认 **8765**（被占用时顺延 8766–8774，实际端口见 App 通知与欢迎帧后的 URL）
-- 安全模型：v1 面向局域网，无鉴权、无 TLS（`http://` / `ws://`）
+- 传输：微喵云房间中继 `wss://socket.wemew.com/websocket/bluetooth_box/{barId}`，
+  barId = 门店号（App 首页「门店授权」卡可见）
+- **角色约定**：`control_box` = **显示端**；`control_box_phone` = **手机端（App，歌词来源）**
+- 云是房间广播中继：任意帧原样转发给全房间**含发送者自身**；进房 2 秒心跳维持在线
+- 安全模型：v1 房间凭 barId 进入，无额外鉴权
 - 参考实现：服务端 `app/src/main/java/wemew/lrc/sync/WebProtocolCodec.java`（与本文档同步演进）
 
 ## 0. 三分钟接入
 
-**推荐：云端接入（不受手机 IP 变化影响）** —— 手机 App 绑定门店后自动加入微喵云房间
-`wss://socket.wemew.com/websocket/bluetooth_box/{barId}` 并持续推送协议 v1 帧；显示端
-连同一房间即可，地址就是门店号（barId，见 App 首页「门店授权」卡）：
-
 1. **参考显示页**：仓库 `web-test-client/index.html`（浏览器直接打开或任意静态服务器
    托管），用 `?barId={门店号}` 直达，或在页面 ⚙ 里填门店号。
-2. **自研显示端（云端）**：连 `wss://socket.wemew.com/websocket/bluetooth_box/{barId}`，
-   每 2 秒发房间心跳
+2. **自研显示端**：连 `wss://socket.wemew.com/websocket/bluetooth_box/{barId}`，每 2 秒
+   发房间心跳
    `{"type":"online","sender":"control_box","data":{"deviceId":"<你的设备ID>","timestamp":<ms>}}`，
-   然后处理收到的协议 v1 帧（`track`/`state`/`line`/`pong`），按 §6 插值。
-   **角色约定**：`control_box` = **显示端**；`control_box_phone` = **手机端（App/歌词来源）**。
-   云是房间广播中继：任意帧原样转发给全房间**含发送者自身**（忽略自己的回显与
-   `online` 心跳即可）；显示端进房后 App 会主动推 `track`+`state` 快照。
-
-**局域网直连（调试用）**：`ws://<手机IP>:8765/ws`（REST 同源 `/api/*`）；显示页用
-`?host=<手机IP>:8765`。App 的 8765 端口不提供显示页，仅 `/protocol` 文档与数据端点。
-v1 无鉴权：云端房间凭 barId 进入，局域网仅限可信网络。
+   然后处理收到的协议 v1 帧（`track`/`state`/`line`/`pong`），按 §6 插值。忽略自己发出
+   帧的回显与 `online` 心跳；进房后 App 会主动推 `track`+`state` 快照。
 
 > 云端大帧：`track` 帧携带全量时间轴（典型 4–10KB）已实测经云中继正常收发；
 > 超大曲目建议显示端容忍分帧到达。
@@ -117,7 +110,7 @@ v1 无鉴权：云端房间凭 barId 进入，局域网仅限可信网络。
 | `lyric.live` | `true`＝播放器实时歌词（只有行文本，无时间轴），此时 `lines` 缺省，后续用 `line` 帧驱动 |
 | `lines[].t / d` | 行起始毫秒 / 行时长毫秒（绝对时间） |
 | `lines[].words` | 逐字时间轴，可缺省（＝行级歌词）；`words[].t/d` 同为绝对毫秒 |
-| `hasArt` / `artVersion` | 有封面时用 `GET /cover?v={artVersion}` 取 JPEG |
+| `hasArt` / `artVersion` | 封面扩展位；当前恒为 `false`/`0`（云传输暂不携带封面） |
 
 ### 4.2 `state` — 轻量进度锚点
 
@@ -175,13 +168,6 @@ rtt = t2 - t0        // t0 客户端发出、t1 服务器回显、t2 客户端�
 - 新锚点到达时，若与本地预测相差在 **±250ms** 内则平滑吸附，否则视为 seek 直接跳变
 - 行级/词级进度由客户端从 `lines[].t/d/words` 自行计算（通用端可任选渲染形态）
 
-## 7. REST 降级端点（无 WebSocket 时可用）
-
-| 端点 | 说明 |
-|---|---|
-| `GET /api/state` | `{"v":1,"track":<track.data>|null,"state":<state.data>}` |
-| `GET /api/track` | `{"v":1,"track":<track.data>|null}` |
-| `GET /cover?v=N` | 当前封面 JPEG（512px/q82）；版本不符或无封面返回 404 |
-
-所有 REST 响应带 `Access-Control-Allow-Origin: *`；`/cover` 带 `Cache-Control: max-age=30`。
-`GET /` 返回内置信息页（真正的显示页在仓库 `web-test-client/`）。
+> 历史说明：v1 早期版本曾在手机上提供局域网 HTTP/WS 直连与 REST 降级端点
+> （`/api/state`、`/api/track`、`/cover`），已随纯云端方案整体移除；`hasArt`/`artVersion`
+> 字段保留在协议中作为扩展位（当前恒为 `false`/`0`）。

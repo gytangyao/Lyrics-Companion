@@ -209,8 +209,8 @@
             <label><input type="checkbox" id="showNext"> 显示下一句</label>
         </div>
         <div class="field">
-            <label>连接地址（门店号 = 走云端；IP:端口 = 局域网）</label>
-            <input type="text" id="hostInput" placeholder="门店号 或 192.168.1.5:8765">
+            <label>门店号（barId，见 App 首页「门店授权」）</label>
+            <input type="text" id="hostInput" placeholder="例如 f819730e-867e-…">
             <button id="connectHost" style="margin-top:8px;width:100%;padding:9px;background:#6EE7F2;color:#07111F;border:none;border-radius:8px;font-size:14px;font-weight:bold;">连接</button>
         </div>
         <button id="closeSettings">完成</button>
@@ -284,50 +284,34 @@
         return anchor.positionMs + elapsed * anchor.speed + manualOffsetMs;
     }
 
-    /* ---------------- transport ---------------- */
+    /* ---------------- transport (cloud room only) ---------------- */
 
     var socket = null;
     var reconnectTimer = null;
-    var pollTimer = null;
     var pingTimer = null;
     var cloudTimer = null;
-    var HOST_KEY = 'wemew.display.address';
+    var BAR_KEY = 'wemew.display.barId';
     var CLOUD_ROOM = 'wss://socket.wemew.com/websocket/bluetooth_box/';
     var DISPLAY_ID_KEY = 'wemew.display.id';
-    /** '' = same-origin (served by the app); 'ip:port' = LAN; UUID = cloud room (barId). */
-    var remoteHost = '';
-    var cloudBarId = '';
+    var barId = '';
     var displayId = '';
 
-    function addressParam() {
-        var host = window.location.search.match(/[?&]host=([^&]+)/);
-        var bar = window.location.search.match(/[?&]barId=([^&]+)/);
-        var value = bar ? bar[1] : (host ? host[1] : null);
-        return value === null ? null : decodeURIComponent(value);
+    function barIdParam() {
+        var match = window.location.search.match(/[?&]barId=([^&]+)/);
+        return match ? decodeURIComponent(match[1]).trim() : null;
     }
 
-    function classify(address) {
-        var value = (address || '').trim()
-                .replace(/^wss?:\/\/|^https?:\/\//, '').replace(/\/.*$/, '');
-        if (/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
-                .test(value)) {
-            cloudBarId = value;
-            remoteHost = '';
-        } else {
-            cloudBarId = '';
-            remoteHost = value;
-        }
+    function normalizeBarId(value) {
+        return (value || '').trim().replace(/^wss?:\/\/[^/]+\//, '').replace(/\/.*$/, '');
     }
 
-    function resolveHost() {
-        var fromUrl = addressParam();
-        if (fromUrl !== null && fromUrl.trim()) {
-            classify(fromUrl);
+    function resolveBarId() {
+        var fromUrl = barIdParam();
+        if (fromUrl) {
+            barId = normalizeBarId(fromUrl);
         } else {
-            try { classify(window.localStorage.getItem(HOST_KEY) || ''); } catch (error) { }
-        }
-        if (!remoteHost && !cloudBarId && !window.location.host) {
-            try { classify(window.localStorage.getItem(HOST_KEY) || ''); } catch (error) { }
+            try { barId = normalizeBarId(window.localStorage.getItem(BAR_KEY) || ''); }
+            catch (error) { }
         }
         try {
             displayId = window.localStorage.getItem(DISPLAY_ID_KEY) || '';
@@ -344,28 +328,13 @@
         }
     }
 
-    function wsUrl() {
-        if (cloudBarId) return CLOUD_ROOM + cloudBarId;
-        if (!remoteHost) {
-            return (window.location.protocol === 'https:' ? 'wss://' : 'ws://')
-                    + window.location.host + '/ws';
-        }
-        return 'ws://' + remoteHost + '/ws';
-    }
-
-    function restBase() {
-        return remoteHost && !cloudBarId ? 'http://' + remoteHost : '';
-    }
-
-    function rememberHost() {
-        var address = cloudBarId || remoteHost;
-        try { window.localStorage.setItem(HOST_KEY, address); } catch (error) { }
+    function rememberBarId() {
+        try { window.localStorage.setItem(BAR_KEY, barId); } catch (error) { }
     }
 
     function reconnectAll() {
         if (socket) { try { socket.onclose = null; socket.close(); } catch (error) { } socket = null; }
         if (reconnectTimer) { window.clearTimeout(reconnectTimer); reconnectTimer = null; }
-        if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null; }
         if (pingTimer) { window.clearInterval(pingTimer); pingTimer = null; }
         if (cloudTimer) { window.clearInterval(cloudTimer); cloudTimer = null; }
         anchor.ts = 0;
@@ -378,28 +347,23 @@
     }
 
     function connect() {
-        if (!window.WebSocket) {
-            setDot(cloudBarId ? '#66788F' : '#C9A227');
-            if (!cloudBarId) startPolling();
+        if (!window.WebSocket || !barId) {
+            setDot('#66788F');
+            scheduleReconnect();
             return;
         }
         try {
-            socket = new WebSocket(wsUrl());
+            socket = new WebSocket(CLOUD_ROOM + barId);
         } catch (error) {
             scheduleReconnect();
             return;
         }
         socket.onopen = function () {
             setDot('#6EE7F2');
-            if (cloudBarId) {
-                // Cloud room: announce as the display side and keep a 2 s heartbeat.
-                sendCloudOnline();
-                if (cloudTimer) window.clearInterval(cloudTimer);
-                cloudTimer = window.setInterval(sendCloudOnline, 2000);
-            } else {
-                send({ v: PROTOCOL, type: 'hello', data: { protocol: PROTOCOL,
-                        client: { name: 'wemew-test-page', version: '1.0' } } });
-            }
+            // Announce as the display side; the app answers with a track+state snapshot.
+            sendCloudOnline();
+            if (cloudTimer) window.clearInterval(cloudTimer);
+            cloudTimer = window.setInterval(sendCloudOnline, 2000);
             if (pingTimer) window.clearInterval(pingTimer);
             pingTimer = window.setInterval(sendPing, 5000);
             sendPing();
@@ -432,43 +396,6 @@
 
     function sendPing() {
         send({ v: PROTOCOL, type: 'ping', ts: Date.now() });
-    }
-
-    function startPolling() {
-        if (pollTimer) return;
-        pollTimer = window.setInterval(function () {
-            getJson(restBase() + '/api/state', function (root) {
-                if (!root) return;
-                if (root.track) onTrackData(root.track);
-                if (root.state) onStateData(root.state);
-            });
-        }, 1000);
-        getJson(restBase() + '/api/state', function (root) {
-            if (!root) return;
-            if (root.track) onTrackData(root.track);
-            if (root.state) onStateData(root.state);
-        });
-    }
-
-    function getJson(url, callback) {
-        try {
-            var request = new XMLHttpRequest();
-            request.open('GET', url, true);
-            request.onreadystatechange = function () {
-                if (request.readyState === 4) {
-                    if (request.status >= 200 && request.status < 300) {
-                        var parsed = null;
-                        try { parsed = JSON.parse(request.responseText); } catch (error) { }
-                        callback(parsed);
-                    } else {
-                        callback(null);
-                    }
-                }
-            };
-            request.send(null);
-        } catch (error) {
-            callback(null);
-        }
     }
 
     /* ---------------- frame handling (unknown types are ignored) ---------------- */
@@ -507,10 +434,8 @@
                 (data.sourceName ? data.sourceName : '') +
                 (artist ? ' · ' + artist : ''));
         if (data.hasArt && data.artVersion !== artVersionSeen) {
+            // Cover transport is reserved (no HTTP leg in the cloud-only transport).
             artVersionSeen = data.artVersion;
-            var wrap = document.getElementById('coverWrap');
-            wrap.style.backgroundImage = 'url("' + restBase() + '/cover?v=' + artVersionSeen + '")';
-            wrap.style.display = 'block';
         } else if (!data.hasArt) {
             artVersionSeen = -1;
             document.getElementById('coverWrap').style.display = 'none';
@@ -806,19 +731,17 @@
         document.getElementById('closeSettings').onclick = function () {
             document.getElementById('settingsPanel').className = '';
         };
-        var hostInput = document.getElementById('hostInput');
-        var connectHost = document.getElementById('connectHost');
-        hostInput.value = cloudBarId || remoteHost;
-        hostInput.onkeydown = function (event) {
-            if (event.keyCode === 13) connectHost.onclick();
+        var barInput = document.getElementById('hostInput');
+        var connectBar = document.getElementById('connectHost');
+        barInput.value = barId;
+        barInput.onkeydown = function (event) {
+            if (event.keyCode === 13) connectBar.onclick();
         };
-        connectHost.onclick = function () {
-            classify(hostInput.value || '');
-            rememberHost();
+        connectBar.onclick = function () {
+            barId = normalizeBarId(barInput.value || '');
+            rememberBarId();
             document.getElementById('settingsPanel').className = '';
-            var target = cloudBarId || remoteHost;
-            SafeToastLocal(target ? '正在连接 ' + (cloudBarId ? '门店 ' + cloudBarId : target)
-                    : '已切回同源地址');
+            SafeToastLocal(barId ? '正在连接门店 ' + barId : '请输入门店号');
             reconnectAll();
         };
 
@@ -865,8 +788,8 @@
     }
 
     loadSettings();
-    resolveHost();
-    rememberHost();
+    resolveBarId();
+    rememberBarId();
     updateMetaLayout();
     bindSettings();
     bindKeys();

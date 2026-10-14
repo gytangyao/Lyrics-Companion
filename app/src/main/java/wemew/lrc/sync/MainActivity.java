@@ -46,9 +46,8 @@ public final class MainActivity extends AppCompatActivity {
     private TextView bindingStore;
     private TextView bindingDevice;
     private TextView bindingMeta;
-    private TextView webStatus;
     private TextView cloudStatus;
-    private LinearLayout webUrlRows;
+    private TextView cloudPush;
     private TextView musicTitle;
     private TextView musicSource;
     private TextView lyricDetail;
@@ -169,19 +168,14 @@ public final class MainActivity extends AppCompatActivity {
         cloudStatus = text("", 14, 0xFF6EE7F2, true);
         cloudStatus.setPadding(0, dp(8), 0, dp(2));
         syncCard.addView(cloudStatus);
-        TextView cloudHint = text("云端经微喵门店房间转发，显示端只需门店号即可连接，不受手机 IP 变化影响。",
+        TextView cloudHint = text("同步经微喵云门店房间转发，显示端只需门店号即可连接，"
+                + "显示页在仓库 web-test-client（?barId=门店号）。",
                 12, 0xFF74869D, false);
         cloudHint.setLineSpacing(0f, 1.2f);
         syncCard.addView(cloudHint);
-        TextView lanLabel = text("局域网直连（调试用）", 13, 0xFFA9B6C8, true);
-        lanLabel.setPadding(0, dp(10), 0, 0);
-        syncCard.addView(lanLabel);
-        webStatus = text("", 14, 0xFF6EE7F2, false);
-        webStatus.setPadding(0, dp(4), 0, dp(2));
-        syncCard.addView(webStatus);
-        webUrlRows = new LinearLayout(this);
-        webUrlRows.setOrientation(LinearLayout.VERTICAL);
-        syncCard.addView(webUrlRows);
+        cloudPush = text("", 12, 0xFF66788F, false);
+        cloudPush.setPadding(0, dp(4), 0, 0);
+        syncCard.addView(cloudPush);
 
         // ---- 歌词信息 ----
         LinearLayout lyricCard = card();
@@ -258,61 +252,8 @@ public final class MainActivity extends AppCompatActivity {
             cloudStatus.setText("云端：连接中…（已绑定 " + barId + "）");
             cloudStatus.setTextColor(0xFFFFCA66);
         }
-        boolean running = WebSyncService.isRunning();
-        int port = WebSyncService.port();
-        webStatus.setText(running
-                ? "服务运行中 · 端口 " + port + " · 已连接显示端 " + WebSyncService.clientCount() + " 个"
-                : "服务未运行");
-        webStatus.setTextColor(running ? 0xFF6EE7F2 : 0xFFFFCA66);
-        webUrlRows.removeAllViews();
-        if (!running) return;
-
-        // 每个显示端一行：hello 上报的名称、连接时长、最近活动。
-        for (WebSyncSocket socket : WebSyncService.clientSockets()) {
-            String name = socket.clientName == null || socket.clientName.isEmpty()
-                    ? "未命名显示端" : socket.clientName;
-            long connectedMinutes = Math.max(0L, (android.os.SystemClock.elapsedRealtime()
-                    - socket.connectedAtElapsedMs) / 60_000L);
-            long activeSeconds = Math.max(0L, (android.os.SystemClock.elapsedRealtime()
-                    - socket.lastActivityElapsedMs) / 1000L);
-            TextView clientLine = text("· " + name + " · 已连 " + connectedMinutes + " 分钟"
-                            + " · 活跃 " + (activeSeconds < 90 ? activeSeconds + " 秒前"
-                            : activeSeconds / 60 + " 分钟前") + " · 下发 " + socket.sentFrames + " 帧",
-                    12, 0xFF9EAFBF, false);
-            clientLine.setPadding(dp(2), dp(2), 0, 0);
-            webUrlRows.addView(clientLine);
-        }
-
         String push = WebSyncService.pushSummary();
-        if (push != null && !push.isEmpty()) {
-            TextView pushLine = text("最近推送：" + push, 12, 0xFF66788F, false);
-            pushLine.setPadding(dp(2), dp(4), 0, 0);
-            webUrlRows.addView(pushLine);
-        }
-
-        List<String> urls = WebSyncService.lanUrls();
-        if (urls.isEmpty()) {
-            TextView none = text("未找到局域网地址；请确认设备与显示端在同一网络", 12,
-                    0xFF8392A8, false);
-            none.setPadding(0, dp(2), 0, dp(2));
-            webUrlRows.addView(none);
-            return;
-        }
-        for (String url : urls) {
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            TextView label = text(url, 13, 0xFFD8E1EE, false);
-            label.setPadding(0, 0, dp(8), 0);
-            row.addView(label, new LinearLayout.LayoutParams(0, -2, 1f));
-            MaterialButton copy = button("复制", false);
-            copy.setOnClickListener(v -> copyText("网页歌词地址", url));
-            copy.setMinWidth(dp(72));
-            row.addView(copy, new LinearLayout.LayoutParams(-2, dp(42)));
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-            params.topMargin = dp(4);
-            webUrlRows.addView(row, params);
-        }
+        cloudPush.setText(push == null || push.isEmpty() ? "" : "最近推送：" + push);
     }
 
     private void refreshLyric() {

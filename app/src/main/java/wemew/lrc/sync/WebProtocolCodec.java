@@ -180,15 +180,6 @@ final class WebProtocolCodec {
         return envelope(WebProtocol.TYPE_ERROR, ts, data);
     }
 
-    /** REST snapshot: the current track data (or null) plus the current state data. */
-    static String restSnapshot(JSONObject trackData, JSONObject stateData) {
-        JSONObject root = new JSONObject();
-        put(root, "v", WebProtocol.PROTOCOL_VERSION);
-        put(root, "track", trackData == null ? JSONObject.NULL : trackData);
-        put(root, "state", stateData);
-        return root.toString();
-    }
-
     static String envelope(String type, long ts, JSONObject data) {
         JSONObject envelope = new JSONObject();
         put(envelope, "v", WebProtocol.PROTOCOL_VERSION);
