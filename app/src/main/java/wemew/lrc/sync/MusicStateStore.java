@@ -87,6 +87,10 @@ final class MusicStateStore {
         String newTitle = hasCompositeIdentity ? compositeTitle : rawTitle;
         String newArtist = hasCompositeIdentity
                 ? stableArtistFromComposite(newTitle, rawArtist) : rawArtist;
+        // 全民K歌把"（原唱：…）/（伴奏）/（cover…）"等后缀放进歌名，清洗后再参与匹配与展示。
+        if ("wesing".equals(normalizedSource)) {
+            newTitle = KaraokeTitleRules.clean(newTitle);
+        }
         String incomingLiveSessionLyric = data.sessionLyricPresent
                 ? data.sessionLyric : hasCompositeIdentity ? rawTitle : "";
         String newMediaId = data.mediaId;

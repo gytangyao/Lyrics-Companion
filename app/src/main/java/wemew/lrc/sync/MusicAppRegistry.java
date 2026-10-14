@@ -14,6 +14,8 @@ final class MusicAppRegistry {
             new App("netease", "网易云音乐车机版", "com.netease.cloudmusic.iot"),
             new App("qqmusic", "QQ 音乐", "com.tencent.qqmusic"),
             new App("qqmusic", "QQ 音乐", "com.tencent.qqmusiccar"),
+            new App("wesing", "全民K歌", "com.tencent.karaoke"),
+            new App("wesing", "全民K歌", "com.tencent.karaoke.car"),
             new App("kugou", "酷狗音乐", "com.kugou.android"),
             new App("kugou", "酷狗音乐", "com.kugou.android.auto"),
             new App("kugou", "酷狗概念版", "com.kugou.android.lite"),
@@ -80,6 +82,9 @@ final class MusicAppRegistry {
         }
         if (containsAny(label, "qq", "腾讯音乐", "qqmusic")) {
             return new App("qqmusic", "QQ 音乐", packageName);
+        }
+        if (containsAny(label, "全民k歌", "wesing", "karaoke", "k歌")) {
+            return new App("wesing", "全民K歌", packageName);
         }
         if (containsAny(label, "酷狗", "kugou", "kgmusic")) {
             return new App("kugou", "酷狗音乐", packageName);
