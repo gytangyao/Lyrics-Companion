@@ -1,6 +1,8 @@
 package wemew.lrc.sync;
 
 import org.junit.Test;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -134,5 +136,34 @@ public class LrcTimelineTest {
                 "[00:01.00]一\n[00:02.00]二\n[00:03.00]三", "");
         assertEquals(3_000L, timeline.shiftedPosition(2_200L, 1));
         assertEquals(1_000L, timeline.shiftedPosition(2_200L, -1));
+    }
+
+    @Test public void sentinelDurationsAreSanitized() {
+        // Soda's native timing marks the final line with JS MAX_SAFE_INTEGER as "until the
+        // end"; it must not inflate the timeline span (which tripped the live fallback).
+        List<LrcTimeline.Word> words = new ArrayList<>();
+        words.add(new LrcTimeline.Word(1000, 400, "山"));
+        words.add(new LrcTimeline.Word(1400, 9007199254740991L, "哦"));
+        List<LrcTimeline.Line> lines = new ArrayList<>();
+        lines.add(new LrcTimeline.Line(0, 900, "前奏"));
+        lines.add(new LrcTimeline.Line(1000, 9007199254740991L, "山哦", "", words));
+        lines.add(new LrcTimeline.Line(3000, 2000, "尾声", "",
+                java.util.Collections.emptyList()));
+        LrcTimeline timeline = LrcTimeline.fromTimedLines(lines);
+        List<LrcTimeline.Line> result = timeline.lines();
+        assertEquals(3, result.size());
+        assertEquals(900, result.get(0).durationMs);
+        assertEquals(1400, result.get(1).durationMs);
+        assertEquals(1000, result.get(1).words.get(1).durationMs);
+        assertEquals(2000, result.get(2).durationMs);
+    }
+
+    @Test public void absurdLineStartsAreDropped() {
+        List<LrcTimeline.Line> lines = new ArrayList<>();
+        lines.add(new LrcTimeline.Line(1000, 900, "正常行"));
+        lines.add(new LrcTimeline.Line(9007199254740991L, 900, "哨兵行"));
+        LrcTimeline timeline = LrcTimeline.fromTimedLines(lines);
+        assertEquals(1, timeline.lineCount());
+        assertEquals("正常行", timeline.lines().get(0).text);
     }
 }

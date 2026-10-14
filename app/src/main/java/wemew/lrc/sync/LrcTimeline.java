@@ -63,8 +63,47 @@ final class LrcTimeline {
 
     private final List<Line> lines;
 
-    private LrcTimeline(List<Line> lines) {
-        this.lines = lines;
+    /** Starts beyond six hours are provider garbage, not a lyric position. */
+    private static final long MAX_LINE_START_MS = 6L * 60 * 60 * 1000;
+    /**
+     * Providers send sentinel "until the end" spans — Soda's native timing uses
+     * 9007199254740991 (JS MAX_SAFE_INTEGER), which used to inflate the timeline span to an
+     * astronomical value and trip the duration-mismatch fallback to the untimed live lyric.
+     * Anything beyond an hour is recalculated from the word ends instead.
+     */
+    private static final long MAX_LINE_DURATION_MS = 60L * 60 * 1000;
+
+    private LrcTimeline(List<Line> input) {
+        ArrayList<Line> sane = new ArrayList<>(input.size());
+        for (Line line : input) {
+            if (line.timeMs < 0 || line.timeMs > MAX_LINE_START_MS) continue;
+            List<Word> words = Collections.emptyList();
+            if (line.words != null && !line.words.isEmpty()) {
+                words = new ArrayList<>(line.words.size());
+                for (Word word : line.words) {
+                    if (word.startMs < 0 || word.startMs > MAX_LINE_START_MS) continue;
+                    long wordDuration = word.durationMs;
+                    if (wordDuration < 0 || wordDuration > MAX_LINE_DURATION_MS) {
+                        wordDuration = 1000L;
+                    }
+                    words.add(new Word(word.startMs, wordDuration, word.text));
+                }
+            }
+            long duration = line.durationMs;
+            if (duration < 0 || duration > MAX_LINE_DURATION_MS) {
+                duration = 1000L;
+                for (Word word : words) {
+                    duration = Math.max(duration, word.startMs + word.durationMs - line.timeMs);
+                }
+            }
+            Line cleaned = new Line(line.timeMs, duration, line.text, line.translated, words);
+            if (!sane.isEmpty() && sane.get(sane.size() - 1).timeMs == line.timeMs) {
+                sane.set(sane.size() - 1, cleaned);
+            } else {
+                sane.add(cleaned);
+            }
+        }
+        this.lines = Collections.unmodifiableList(sane);
     }
 
     static LrcTimeline fromTimedLines(List<Line> input) {
