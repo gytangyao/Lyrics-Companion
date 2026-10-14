@@ -149,7 +149,9 @@ public final class MainActivity extends AppCompatActivity {
         MaterialButton copyDevice = button("复制", false);
         copyDevice.setOnClickListener(v -> copyText("设备码",
                 StoreBindingClient.deviceId(this)));
-        deviceRow.addView(copyDevice, new LinearLayout.LayoutParams(dp(72), dp(42)));
+        copyDevice.setMinWidth(dp(72));
+        deviceRow.addView(copyDevice,
+                new LinearLayout.LayoutParams(-2, dp(42)));
         bindingCard.addView(deviceRow);
         TextView bindingHint = text("请把设备码登记到微喵门店后台完成授权；绑定后自动同步门店信息。",
                 12, 0xFF74869D, false);
@@ -223,14 +225,17 @@ public final class MainActivity extends AppCompatActivity {
         long lastCheck = AppPreferences.bindingLastCheckMs(this);
         String error = AppPreferences.bindingLastError(this);
         StringBuilder meta = new StringBuilder();
+        boolean checkFailed = error != null && !error.trim().isEmpty();
         if (lastCheck > 0L) {
-            meta.append("最近检查 ").append(formatAge(lastCheck)).append("前");
+            meta.append(checkFailed ? "检查失败" : "最近检查")
+                    .append(" ").append(formatAge(lastCheck)).append("前");
         }
-        if (error != null && !error.trim().isEmpty()) {
+        if (checkFailed) {
             if (meta.length() > 0) meta.append(" · ");
             meta.append("错误：").append(error);
         }
         bindingMeta.setText(meta.toString());
+        bindingMeta.setTextColor(checkFailed ? 0xFFFFCA66 : 0xFF66788F);
     }
 
     private void refreshSync() {
@@ -258,7 +263,8 @@ public final class MainActivity extends AppCompatActivity {
             row.addView(label, new LinearLayout.LayoutParams(0, -2, 1f));
             MaterialButton copy = button("复制", false);
             copy.setOnClickListener(v -> copyText("网页歌词地址", url));
-            row.addView(copy, new LinearLayout.LayoutParams(dp(72), dp(42)));
+            copy.setMinWidth(dp(72));
+            row.addView(copy, new LinearLayout.LayoutParams(-2, dp(42)));
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
             params.topMargin = dp(4);
             webUrlRows.addView(row, params);
