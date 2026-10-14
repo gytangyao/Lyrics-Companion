@@ -47,6 +47,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextView bindingMeta;
     private TextView cloudStatus;
     private TextView cloudPush;
+    private TextView kgeStatus;
     private TextView musicTitle;
     private TextView musicSource;
     private TextView lyricDetail;
@@ -171,6 +172,9 @@ public final class MainActivity extends AppCompatActivity {
         cloudPush = text("", 12, 0xFF7A7FA5, false);
         cloudPush.setPadding(0, dp(4), 0, 0);
         syncCard.addView(cloudPush);
+        kgeStatus = text("", 13, 0xFFADABF2, false);
+        kgeStatus.setPadding(0, dp(6), 0, 0);
+        syncCard.addView(kgeStatus);
 
         // ---- 歌词信息 ----
         LinearLayout lyricCard = card();
@@ -269,6 +273,22 @@ public final class MainActivity extends AppCompatActivity {
         }
         String push = WebSyncService.pushSummary();
         cloudPush.setText(push == null || push.isEmpty() ? "" : "最近推送：" + push);
+        boolean kgeConnected = WebSyncService.kgeConnected();
+        boolean kgeAdvertising = WebSyncService.kgeAdvertising();
+        kgeStatus.setText(kgeConnected ? "K 歌：客户端已连接（全民K歌推词中）"
+                : kgeAdvertising ? "K 歌：广播中，等待全民K歌连接"
+                : hasBluetoothPermission() ? "K 歌：广播未开启（蓝牙未开或设备不支持）"
+                : "K 歌：需要附近设备权限");
+        kgeStatus.setTextColor(kgeConnected ? 0xFFF40861
+                : kgeAdvertising ? 0xFFADABF2 : 0xFFF4E230);
+    }
+
+    private boolean hasBluetoothPermission() {
+        if (Build.VERSION.SDK_INT < 31) return true;
+        return checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
+                == PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     private void refreshLyric() {
@@ -326,6 +346,10 @@ public final class MainActivity extends AppCompatActivity {
         permissionRows.removeAllViews();
         if (!hasNotificationAccess()) {
             addPermissionRow(permissionRows, "音乐读取权限", true, v -> openNotificationAccess());
+        }
+        if (!hasBluetoothPermission()) {
+            addPermissionRow(permissionRows, "附近设备（K 歌）", false,
+                    v -> requestBluetoothPermission());
         }
         boolean postNotifications = Build.VERSION.SDK_INT < 33
                 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -605,6 +629,15 @@ public final class MainActivity extends AppCompatActivity {
         if (ageMs < 60_000L) return (ageMs / 1000L) + " 秒";
         if (ageMs < 3_600_000L) return (ageMs / 60_000L) + " 分钟";
         return (ageMs / 3_600_000L) + " 小时";
+    }
+
+    private void requestBluetoothPermission() {
+        if (Build.VERSION.SDK_INT < 31) {
+            SafeToast.show(this, "当前系统无需单独授予附近设备权限", Toast.LENGTH_SHORT);
+            return;
+        }
+        requestPermissions(new String[]{Manifest.permission.BLUETOOTH_ADVERTISE,
+                Manifest.permission.BLUETOOTH_CONNECT}, 102);
     }
 
     private void requestPostNotificationPermission() {

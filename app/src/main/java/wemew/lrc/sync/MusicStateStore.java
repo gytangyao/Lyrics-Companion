@@ -294,6 +294,22 @@ final class MusicStateStore {
                     generationToLoad = -1L;
                 }
             }
+            // 全民K歌经 KGe BLE 推逐行歌词：会话时间轴优先，词库结果不覆盖（见 load 判废）。
+            if (sessionTimelineAllowed && "wesing".equals(normalizedSource)
+                    && !data.sessionTimeline.isEmpty()) {
+                if (timeline != data.sessionTimeline) {
+                    timeline = data.sessionTimeline;
+                    trackTimelineLocked(timeline);
+                    lyricSourceName = "全民K歌歌词";
+                    lyricLoadFinished = true;
+                    usingSessionTimeline = true;
+                    DiagnosticLog.record(context, "Kge", "session lines=" + timeline.lineCount());
+                }
+                if (!AppPreferences.localLyricEnabled(context)) {
+                    cancelLyricLoadLocked();
+                    generationToLoad = -1L;
+                }
+            }
             if (changed || playbackModeChanged) {
                 Log.i(TAG, "Position sync state=" + stateValue + " advancing=" + newPlaying
                         + " speed=" + effectiveSpeed + " position=" + positionToStore
