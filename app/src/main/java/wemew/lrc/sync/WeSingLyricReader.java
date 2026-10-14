@@ -42,8 +42,14 @@ public final class WeSingLyricReader extends AccessibilityService {
     private long lastPositionMs = -1L;
     private long lastDurationMs = -1L;
     private String songKey = "";
-    /** Lyric lines in first-seen order: text → clock value when the line appeared. */
+    /** Lyric lines in first-seen order: text → start ms (real anchors + interpolated). */
     private final LinkedHashMap<String, Long> lineStarts = new LinkedHashMap<>();
+    /**
+     * Lines from the first visible batch without a start yet; they anchor evenly between the
+     * last real anchor and the first scroll-in anchor once the song advances, which
+     * self-corrects the early part of the timeline (a fixed guess drifted badly on slow songs).
+     */
+    private final List<String> pendingFirstBatch = new ArrayList<>();
 
     static boolean enabled(Context context) {
         String raw = Settings.Secure.getString(context.getContentResolver(),
@@ -96,6 +102,7 @@ public final class WeSingLyricReader extends AccessibilityService {
                 || (lastPositionMs >= 0L && clock.positionMs < lastPositionMs - 3_000L);
         if (newSong) {
             lineStarts.clear();
+            pendingFirstBatch.clear();
             songKey = title + "/" + clock.durationMs;
             lastDurationMs = -1L;
             if (!TextUtils.isEmpty(lastTitle) && !TextUtils.equals(title, lastTitle)) {
@@ -107,21 +114,35 @@ public final class WeSingLyricReader extends AccessibilityService {
         lastDurationMs = clock.durationMs;
         lastTitle = title;
 
-        // Stamp newly visible lines. The first visible batch all appear at once, so the
-        // current (first) line takes the clock and the rest get a 3.5 s running estimate —
-        // later lines scroll in exactly when they start and carry the real clock value.
-        // The +size() epsilon keeps stamps unique (the timeline is keyed by start time).
-        boolean firstBatch = lineStarts.isEmpty();
-        int index = 0;
+        // Line stamping. The first walk that sees lyrics gets its first line (the one being
+        // sung) as a real anchor at the clock; the rest of that batch stays pending. Every
+        // later new text is a scroll-in — the true start of that line — and carries the clock;
+        // the pending early lines are then interpolated evenly between the previous anchor and
+        // it. Stamps get a +size() epsilon so they stay unique (the timeline is keyed by time).
+        boolean firstBatchWalk = lineStarts.isEmpty() && pendingFirstBatch.isEmpty();
         for (String text : ordered) {
-            if (lineStarts.containsKey(text)) continue;
+            if (lineStarts.containsKey(text) || pendingFirstBatch.contains(text)) continue;
             if (!isLyricLine(text, title)) continue;
-            long start = firstBatch
-                    ? clock.positionMs + index * 3_500L
-                    : clock.positionMs;
-            lineStarts.put(text, start + lineStarts.size());
-            index++;
-            if (lineStarts.size() > 200) break;
+            if (firstBatchWalk) {
+                if (lineStarts.isEmpty()) {
+                    lineStarts.put(text, clock.positionMs);
+                } else {
+                    pendingFirstBatch.add(text);
+                }
+            } else {
+                long previous = lastAnchorMs();
+                long start = clock.positionMs + lineStarts.size();
+                int queued = pendingFirstBatch.size();
+                long share = queued > 0
+                        ? Math.max(500L, (start - previous) / (queued + 1)) : 0L;
+                for (int i = 0; i < queued; i++) {
+                    lineStarts.put(pendingFirstBatch.get(i),
+                            previous + share * (i + 1) + lineStarts.size());
+                }
+                pendingFirstBatch.clear();
+                lineStarts.put(text, start + 1);
+            }
+            if (lineStarts.size() + pendingFirstBatch.size() > 200) break;
         }
 
         List<LrcTimeline.Line> lines = new ArrayList<>(lineStarts.size());
@@ -232,6 +253,13 @@ public final class WeSingLyricReader extends AccessibilityService {
     private static final class Clock {
         long positionMs = -1L;
         long durationMs = -1L;
+    }
+
+    /** The most recent stamp in insertion order (the current line's anchor). */
+    private long lastAnchorMs() {
+        long last = 0L;
+        for (Long value : lineStarts.values()) last = value;
+        return last;
     }
 
     /** Chrome texts observed on the singing screen across songs. */
