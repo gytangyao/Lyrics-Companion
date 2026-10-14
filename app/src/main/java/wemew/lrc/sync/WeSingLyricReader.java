@@ -8,32 +8,42 @@ import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Set;
+import java.util.Map;
 
 /**
- * Lyric source for 全民K歌, verified on-device: the singing screen exposes the song title
- * (next to the 原唱 badge), a per-second position clock and the total duration through the
- * accessibility tree. Title + position is everything the catalog pipeline needs — the five
- * providers return a word-timed timeline, so the big screen gets full karaoke. WeSing never
- * publishes a usable MediaSession, which is why this reader exists.
+ * Lyric source for 全民K歌. WeSing exposes neither a usable MediaSession nor track
+ * notifications, so this reader takes the lyrics straight off the singing screen — they are
+ * by definition the exact words being sung, which no catalog match can beat. On every content
+ * change it walks the karaoke window: the badge row yields the song title and the per-second
+ * position clock, and each newly visible lyric line is stamped with the clock value at the
+ * moment it appears, building a line timeline live. The timeline rides the existing
+ * sessionTimeline plumbing (wesing source), so the display protocol is untouched: track
+ * frames carry the lines, state frames carry the clock.
+ *
+ * <p>Strategy: while WeSing is in the foreground this reader feeds the store; the moment it
+ * goes to the background the events stop and the channel arbitration lets the normal
+ * MediaSession players take over.</p>
  */
 public final class WeSingLyricReader extends AccessibilityService {
-    /** Verified singing-screen chrome that shares the badge row and the full tree. */
-    private static final Set<String> NOISE = new HashSet<>(Arrays.asList(
-            "调音", "练唱", "选片段", "录视频", "完成", "和友友一起大合唱", "乐团和声", "换主题",
-            "前往歌房演唱", "发起合唱", "升降调", "高品质", "开始大合唱", "重录", "AI演唱",
-            "开始演唱", "合唱", "歌房唱", "原唱", "HQ", "·", "/", "超级会员上线,开通解锁高等级权益"));
+    private static final long WALK_INTERVAL_MS = 700L;
+    /** A visible line shorter/longer than this is not a lyric. */
+    private static final int LINE_MIN_CHARS = 4;
+    private static final int LINE_MAX_CHARS = 40;
 
     private long lastWalkAtMs;
+    private int diagnosticDumps;
     private String lastTitle = "";
     private long lastPositionMs = -1L;
     private long lastDurationMs = -1L;
+    private String songKey = "";
+    /** Lyric lines in first-seen order: text → clock value when the line appeared. */
+    private final LinkedHashMap<String, Long> lineStarts = new LinkedHashMap<>();
 
     static boolean enabled(Context context) {
         String raw = Settings.Secure.getString(context.getContentResolver(),
@@ -41,10 +51,8 @@ public final class WeSingLyricReader extends AccessibilityService {
         if (TextUtils.isEmpty(raw)) return false;
         ComponentName target = new ComponentName(context, WeSingLyricReader.class);
         for (String entry : raw.split(":")) {
-            if (ComponentName.unflattenFromString(entry) != null
-                    && target.equals(ComponentName.unflattenFromString(entry))) {
-                return true;
-            }
+            ComponentName name = ComponentName.unflattenFromString(entry);
+            if (target.equals(name)) return true;
         }
         return false;
     }
@@ -54,12 +62,14 @@ public final class WeSingLyricReader extends AccessibilityService {
         CharSequence pkg = event.getPackageName();
         if (pkg == null || !"com.tencent.karaoke".contentEquals(pkg)) return;
         long now = SystemClock.elapsedRealtime();
-        if (now - lastWalkAtMs < 800L) return;
+        if (now - lastWalkAtMs < WALK_INTERVAL_MS) return;
         lastWalkAtMs = now;
-        AccessibilityNodeInfo root = getRootInActiveWindow();
+        AccessibilityNodeInfo root = usableRoot(event);
         if (root == null) return;
         try {
             handle(root);
+        } catch (Throwable error) {
+            android.util.Log.w("WeSing", "walk failed", error);
         } finally {
             root.recycle();
         }
@@ -67,142 +77,255 @@ public final class WeSingLyricReader extends AccessibilityService {
 
     @Override public void onInterrupt() { }
 
-    private void handle(AccessibilityNodeInfo root) {
-        List<String> rowTexts = new ArrayList<>();
-        findBadgeRow(root, 0, rowTexts);
-        String title = null;
-        if (!rowTexts.isEmpty()) {
-            title = titleFromRow(rowTexts);
-        }
-        if (title == null) {
-            // Fallback patterns from the full tree: "谁（廖俊涛）" / "推荐优质伴奏|谁(Live)—廖俊涛".
-            Set<String> all = new HashSet<>();
-            walk(root, all, 0);
-            title = titleFromPatterns(all);
-            if (rowTexts.isEmpty()) rowTexts.addAll(all);
-        }
-        if (title == null) return;
+    // ---- collection ----
 
-        long[] clock = clockFromTexts(rowTexts);
-        long positionMs = clock[0];
-        long durationMs = clock[1];
-        if (positionMs < 0L) return;
-        // Pause detection: the per-second clock stops advancing while paused.
-        boolean playing = positionMs != lastPositionMs;
-        if (positionMs < lastPositionMs - 3_000L) {
-            // Rewound to a segment start or a new song: forget the old anchors.
-            lastDurationMs = -1L;
+    private void handle(AccessibilityNodeInfo root) {
+        // Ordered full-tree texts: tree order approximates the on-screen lyric order.
+        List<String> ordered = new ArrayList<>(64);
+        walkOrdered(root, ordered, 0);
+        if (diagnosticDumps < 2) {
+            diagnosticDumps++;
+            DiagnosticLog.record(this, "WeSing", "dump[" + ordered.size() + "]: "
+                    + String.join("|", ordered));
         }
-        lastPositionMs = positionMs;
-        lastDurationMs = durationMs;
+
+        Clock clock = clockFrom(ordered);
+        if (clock.positionMs < 0L) return;
+        String title = titleFrom(ordered);
+        boolean newSong = !TextUtils.equals(title, lastTitle)
+                || (lastPositionMs >= 0L && clock.positionMs < lastPositionMs - 3_000L);
+        if (newSong) {
+            lineStarts.clear();
+            songKey = title + "/" + clock.durationMs;
+            lastDurationMs = -1L;
+            if (!TextUtils.isEmpty(lastTitle) && !TextUtils.equals(title, lastTitle)) {
+                DiagnosticLog.record(this, "WeSing", "song changed: " + title);
+            }
+        }
+        boolean playing = clock.positionMs != lastPositionMs;
+        lastPositionMs = clock.positionMs;
+        lastDurationMs = clock.durationMs;
         lastTitle = title;
 
+        // Stamp newly visible lines. The first visible batch all appear at once, so the
+        // current (first) line takes the clock and the rest get a 3.5 s running estimate —
+        // later lines scroll in exactly when they start and carry the real clock value.
+        // The +size() epsilon keeps stamps unique (the timeline is keyed by start time).
+        boolean firstBatch = lineStarts.isEmpty();
+        int index = 0;
+        for (String text : ordered) {
+            if (lineStarts.containsKey(text)) continue;
+            if (!isLyricLine(text, title)) continue;
+            long start = firstBatch
+                    ? clock.positionMs + index * 3_500L
+                    : clock.positionMs;
+            lineStarts.put(text, start + lineStarts.size());
+            index++;
+            if (lineStarts.size() > 200) break;
+        }
+
+        List<LrcTimeline.Line> lines = new ArrayList<>(lineStarts.size());
+        long previousStart = -1L;
+        String previousText = null;
+        for (Map.Entry<String, Long> entry : lineStarts.entrySet()) {
+            if (previousStart >= 0L && previousText != null) {
+                lines.add(new LrcTimeline.Line(previousStart,
+                        Math.max(1000L, entry.getValue() - previousStart), previousText));
+            }
+            previousStart = entry.getValue();
+            previousText = entry.getKey();
+        }
+        if (previousText != null) {
+            lines.add(new LrcTimeline.Line(previousStart, 3000L, previousText));
+        }
+        LrcTimeline timeline = lines.isEmpty() ? LrcTimeline.EMPTY
+                : LrcTimeline.fromTimedLines(lines);
+        String currentLine = previousText == null ? "" : previousText;
+
         MusicPlaybackData data = new MusicPlaybackData(
-                "", title, "", null, "", "", durationMs > 0L ? durationMs : -1L,
+                "", title == null ? "" : title, "", null, "", "",
+                lastDurationMs > 0L ? lastDurationMs : -1L,
                 true, playing ? MusicPlaybackData.STATE_PLAYING : MusicPlaybackData.STATE_PAUSED,
-                positionMs, SystemClock.elapsedRealtime(), 1f);
+                clock.positionMs, SystemClock.elapsedRealtime(), 1f,
+                !currentLine.isEmpty(), currentLine, timeline);
         MusicStateStore.update(this, "wesing", "全民K歌", "com.tencent.karaoke", data);
     }
 
-    /** Smallest ancestor row around the 原唱 badge, level-capped like the verified probe. */
-    private void findBadgeRow(AccessibilityNodeInfo node, int depth, List<String> out) {
-        if (node == null || depth > 30 || !out.isEmpty()) return;
-        CharSequence text = node.getText();
-        if (text != null && text.toString().contains("原唱")) {
-            AccessibilityNodeInfo parent = node.getParent();
-            for (int level = 0; level < 3 && parent != null; level++) {
-                Set<String> around = new HashSet<>();
-                walk(parent, around, 0);
-                if (around.size() >= 2) {
-                    out.addAll(around);
-                    return;
-                }
-                parent = parent.getParent();
-            }
-            return;
+    /** Lyric-candidate filter: Chinese-ish sentence, not chrome, not the title, not a clock. */
+    static boolean isLyricLine(String raw, String title) {
+        String text = raw == null ? "" : raw.trim();
+        if (text.length() < LINE_MIN_CHARS || text.length() > LINE_MAX_CHARS) return false;
+        if (text.matches("\\d{1,2}:\\d{2}.*") || text.matches("[+\\d\\s.%/·]+")) return false;
+        if (WeSingChrome.isChrome(text)) return false;
+        if (title != null && !title.isEmpty()
+                && (text.contains(title) || title.contains(text))) return false;
+        int cjk = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c >= 0x4E00 && c <= 0x9FFF) cjk++;
         }
-        for (int i = 0; i < node.getChildCount(); i++) {
-            findBadgeRow(node.getChild(i), depth + 1, out);
-        }
-    }
-
-    /** The title is the badge-row text that is neither chrome, a clock, nor a score number. */
-    private String titleFromRow(List<String> texts) {
-        for (String value : texts) {
-            String clean = value.trim();
-            if (clean.isEmpty() || NOISE.contains(clean)) continue;
-            if (clean.matches("\\d{1,2}:\\d{2}")) continue;
-            if (clean.matches("\\+?\\d{1,4}")) continue;
-            if (clean.startsWith("+") || clean.contains("kcal") || clean.contains("会员")) continue;
-            // Combined form "谁（廖俊涛）" keeps the artist; plain form is just the title.
-            return clean;
-        }
-        return null;
-    }
-
-    private String titleFromPatterns(Set<String> all) {
-        for (String value : all) {
-            java.util.regex.Matcher combined = java.util.regex.Pattern
-                    .compile("^(.{1,25})（(.{1,25})）$").matcher(value.trim());
-            if (combined.matches()) return combined.group(1);
-            java.util.regex.Matcher recommendation = java.util.regex.Pattern
-                    .compile("伴奏\\|(.{1,25}?)(?:\\(.*?))?—.{1,25}$").matcher(value.trim());
-            if (recommendation.find()) return recommendation.group(1);
-        }
-        return null;
+        return cjk >= 2;
     }
 
     /**
-     * @return {positionMs, durationMs}; the changing/incrementing clock is the position, the
-     * constant one the duration, min wins on the first observation.
+     * The title sits right before the first clock in tree order (verified layout:
+     * "…原唱|等红灯|0:25…" and "…完成|潮湿的心|·|2:14…"), so scan backwards from the first
+     * m:ss text for the nearest non-chrome, non-number text.
      */
-    private long[] clockFromTexts(List<String> texts) {
-        List<Long> times = new ArrayList<>();
-        for (String value : texts) {
-            String clean = value.trim();
-            if (clean.matches("\\d{1,2}:\\d{2}")) {
-                String[] parts = clean.split(":");
+    private String titleFrom(List<String> ordered) {
+        int clockIndex = -1;
+        for (int i = 0; i < ordered.size(); i++) {
+            if (ordered.get(i).trim().matches("\\d{1,2}:\\d{2}")) {
+                clockIndex = i;
+                break;
+            }
+        }
+        if (clockIndex > 0) {
+            for (int i = clockIndex - 1; i >= 0 && i >= clockIndex - 4; i--) {
+                String text = ordered.get(i).trim();
+                if (text.isEmpty() || WeSingChrome.isChrome(text)) continue;
+                if (text.matches("[+\\d\\s.%/·]+")) continue;
+                return text;
+            }
+        }
+        return lastTitle;
+    }
+
+    /** Position = the changing m:ss clock; duration = the constant one. */
+    private Clock clockFrom(List<String> ordered) {
+        List<Long> times = new ArrayList<>(4);
+        for (String value : ordered) {
+            String text = value == null ? "" : value.trim();
+            if (text.matches("\\d{1,2}:\\d{2}")) {
+                String[] parts = text.split(":");
                 times.add((Long.parseLong(parts[0]) * 60L + Long.parseLong(parts[1])) * 1000L);
             }
         }
-        if (times.isEmpty()) return new long[]{-1L, -1L};
-        if (times.size() == 1) {
-            long only = times.get(0);
-            if (lastPositionMs >= 0L && Math.abs(only - lastPositionMs) <= 2_500L) {
-                return new long[]{only, lastDurationMs};
-            }
-            return new long[]{only, -1L};
-        }
+        Clock clock = new Clock();
+        if (times.isEmpty()) return clock;
         long a = times.get(0);
-        long b = times.get(1);
+        long b = times.size() > 1 ? times.get(1) : -1L;
         if (lastPositionMs >= 0L) {
             boolean aMoves = Math.abs(a - lastPositionMs) <= 2_500L;
-            boolean bMoves = Math.abs(b - lastPositionMs) <= 2_500L;
-            if (aMoves && !bMoves) return new long[]{a, b};
-            if (bMoves && !aMoves) return new long[]{b, a};
+            boolean bMoves = b >= 0L && Math.abs(b - lastPositionMs) <= 2_500L;
+            if (aMoves && !bMoves) {
+                clock.positionMs = a;
+                clock.durationMs = b;
+                return clock;
+            }
+            if (bMoves && !aMoves) {
+                clock.positionMs = b;
+                clock.durationMs = a;
+                return clock;
+            }
         }
-        return a <= b ? new long[]{a, b} : new long[]{b, a};
+        if (b < 0L) {
+            clock.positionMs = a;
+            clock.durationMs = lastDurationMs;
+            return clock;
+        }
+        clock.positionMs = Math.min(a, b);
+        clock.durationMs = Math.max(a, b);
+        return clock;
     }
 
-    private void walk(AccessibilityNodeInfo node, Set<String> out, int depth) {
-        if (node == null || depth > 25) return;
+    private static final class Clock {
+        long positionMs = -1L;
+        long durationMs = -1L;
+    }
+
+    /** Chrome texts observed on the singing screen across songs. */
+    private static final class WeSingChrome {
+        private static final String[] CHROME = {
+                "调音", "练唱", "选片段", "录视频", "完成", "和友友一起大合唱", "乐团和声", "换主题",
+                "前往歌房演唱", "发起合唱", "升降调", "高品质", "开始大合唱", "重录", "AI演唱",
+                "开始演唱", "合唱", "歌房唱", "原唱", "HQ", "·", "/", "原唱伴唱", "已合拍",
+                "轻唱热身", "录屏", "跳过尾奏", "立即演唱", "标准音质", "超级会员上线,开通解锁高等级权益"};
+
+        static boolean isChrome(String text) {
+            String clean = text.trim();
+            for (String item : CHROME) {
+                if (clean.equals(item) || clean.startsWith(item + "·")
+                        || clean.endsWith("·" + item) || clean.contains("·" + item + "·")) {
+                    return true;
+                }
+                if ((item.equals("kcal") || item.equals("会员")) && clean.contains(item)) {
+                    return true;
+                }
+            }
+            return clean.contains("kcal") || clean.contains("会员");
+        }
+    }
+
+    // ---- tree access ----
+
+    /**
+     * The recording screen sometimes yields no active-window root, so try the window list for
+     * the karaoke window and finally climb from the event source — any of the three works.
+     */
+    private AccessibilityNodeInfo usableRoot(AccessibilityEvent event) {
+        try {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null && "com.tencent.karaoke".contentEquals(
+                    root.getPackageName() == null ? "" : root.getPackageName())) {
+                return root;
+            }
+            if (root != null) root.recycle();
+        } catch (Throwable ignored) { }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                for (AccessibilityWindowInfo window : getWindows()) {
+                    if (window == null) continue;
+                    AccessibilityNodeInfo root = window.getRoot();
+                    if (root == null) continue;
+                    CharSequence pkg = root.getPackageName();
+                    if (pkg != null && "com.tencent.karaoke".contentEquals(pkg)) return root;
+                }
+            }
+        } catch (Throwable ignored) { }
+        try {
+            AccessibilityNodeInfo source = event.getSource();
+            while (source != null) {
+                AccessibilityNodeInfo parent = source.getParent();
+                if (parent == null) return source;
+                source.recycle();
+                source = parent;
+            }
+        } catch (Throwable ignored) { }
+        return null;
+    }
+
+    private void walkOrdered(AccessibilityNodeInfo node, List<String> out, int depth) {
+        if (node == null || depth > 25 || out.size() > 400) return;
         CharSequence text = node.getText();
         if (text != null) {
             String value = text.toString().trim();
-            if (!value.isEmpty() && value.length() <= 80) out.add(value);
+            if (!value.isEmpty() && value.length() <= 80 && !out.contains(value)) {
+                out.add(value);
+            }
         }
         for (int i = 0; i < node.getChildCount(); i++) {
-            walk(node.getChild(i), out, depth + 1);
+            walkOrdered(node.getChild(i), out, depth + 1);
         }
     }
 
-    // Accessibility services receive a Context only after onBind; expose last identity for UI.
+    // ---- UI helpers ----
+
     static String lastIdentity() {
         WeSingLyricReader reader = instance;
         return reader == null ? "" : reader.lastTitle;
     }
 
-    @SuppressWarnings({"unused", "StaticFieldLeak"})
+    static boolean reading() {
+        WeSingLyricReader reader = instance;
+        return reader != null && SystemClock.elapsedRealtime() - reader.lastWalkAtMs < 10_000L;
+    }
+
+    static int collectedLines() {
+        WeSingLyricReader reader = instance;
+        return reader == null ? 0 : reader.lineStarts.size();
+    }
+
     private static volatile WeSingLyricReader instance;
 
     @Override protected void onServiceConnected() {
@@ -220,10 +343,5 @@ public final class WeSingLyricReader extends AccessibilityService {
     @Override public void onDestroy() {
         instance = null;
         super.onDestroy();
-    }
-
-    static boolean reading() {
-        WeSingLyricReader reader = instance;
-        return reader != null && !TextUtils.isEmpty(reader.lastTitle);
     }
 }

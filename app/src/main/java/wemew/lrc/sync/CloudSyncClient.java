@@ -53,6 +53,13 @@ final class CloudSyncClient {
     private volatile WebSocketClient client;
     private volatile boolean stopped;
     private volatile long lastSnapshotPushElapsed;
+    /** Any inbound frame proves the relay still sees us; heartbeats echo back in ~RTT. */
+    private volatile long lastInboundElapsedMs;
+    /**
+     * A half-open TCP looks alive locally (writes buffer silently), so a connection that
+     * stops echoing within this window is treated as dead and recycled.
+     */
+    private static final long ZOMBIE_TIMEOUT_MS = 15_000L;
 
     CloudSyncClient(Context context, SnapshotSource hooks) {
         this.context = context.getApplicationContext();
@@ -146,6 +153,7 @@ final class CloudSyncClient {
                         return;
                     }
                     DiagnosticLog.record(context, "WebSync", "cloud room joined: " + barId);
+                    lastInboundElapsedMs = SystemClock.elapsedRealtime();
                     handler.post(() -> {
                         sendOnline();
                         scheduleHeartbeat();
@@ -185,6 +193,13 @@ final class CloudSyncClient {
 
     private void heartbeat() {
         if (stopped) return;
+        // Self-liveness: the relay echoes our heartbeat back, so silence means a zombie link.
+        if (lastInboundElapsedMs > 0L
+                && SystemClock.elapsedRealtime() - lastInboundElapsedMs > ZOMBIE_TIMEOUT_MS) {
+            DiagnosticLog.record(context, "WebSync",
+                    "cloud zombie link detected; recycling (" + barId + ")");
+            closeClient();
+        }
         sendOnline();
         scheduleHeartbeat();
     }
@@ -222,6 +237,7 @@ final class CloudSyncClient {
      */
     private void handleInbound(String raw) {
         if (raw == null || "ping".equals(raw.trim())) return;
+        lastInboundElapsedMs = SystemClock.elapsedRealtime();
         WebProtocolCodec.Inbound inbound = WebProtocolCodec.parseInbound(raw);
         if (inbound.type.isEmpty()) return;
         if (isDisplayPing(inbound)) {

@@ -275,8 +275,10 @@ public final class MainActivity extends AppCompatActivity {
         boolean wesingEnabled = WeSingLyricReader.enabled(this);
         boolean wesingReading = WeSingLyricReader.reading();
         String identity = WeSingLyricReader.lastIdentity();
+        int collected = WeSingLyricReader.collectedLines();
         wesingStatus.setText(!wesingEnabled ? "全民K歌：未启用无障碍读取（权限卡可开启）"
-                : wesingReading ? "全民K歌：读取中" + (identity.isEmpty() ? "" : " · " + identity)
+                : wesingReading ? "全民K歌：读取中 · " + (identity.isEmpty() ? "" : identity + " · ")
+                        + collected + " 行屏幕歌词"
                 : "全民K歌：已启用，等待演唱");
         wesingStatus.setTextColor(wesingReading ? 0xFFF40861 : 0xFFADABF2);
     }

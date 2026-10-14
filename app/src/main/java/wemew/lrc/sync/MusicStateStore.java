@@ -294,8 +294,22 @@ final class MusicStateStore {
                     generationToLoad = -1L;
                 }
             }
-            // 全民K歌经 KGe BLE 推逐行歌词：会话时间轴优先，词库结果不覆盖（见 load 判废）。
-            // （BLE 通道因单机自环不可行已回滚，此分支保留给未来多设备形态复用。）
+            // 全民K歌：无障碍从演唱界面采集的行级时间轴是唯一歌词来源（词库匹配不适用），
+            // 时间轴存在即采用并跳过词库加载（load 判废也保证结果不覆盖）。
+            if (sessionTimelineAllowed && "wesing".equals(normalizedSource)
+                    && !data.sessionTimeline.isEmpty()) {
+                if (timeline != data.sessionTimeline) {
+                    timeline = data.sessionTimeline;
+                    trackTimelineLocked(timeline);
+                    lyricSourceName = "全民K歌屏幕歌词";
+                    lyricLoadFinished = true;
+                    usingSessionTimeline = true;
+                    DiagnosticLog.record(context, "WeSing",
+                            "screen lines=" + timeline.lineCount());
+                }
+                cancelLyricLoadLocked();
+                generationToLoad = -1L;
+            }
             if (changed || playbackModeChanged) {
                 Log.i(TAG, "Position sync state=" + stateValue + " advancing=" + newPlaying
                         + " speed=" + effectiveSpeed + " position=" + positionToStore
