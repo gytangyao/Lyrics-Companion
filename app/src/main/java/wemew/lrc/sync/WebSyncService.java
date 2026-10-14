@@ -35,9 +35,6 @@ public final class WebSyncService extends Service {
     private WebStatePublisher publisher;
     private StoreBindingClient bindingClient;
     private CloudSyncClient cloudSync;
-    private KgeGattServer kgeServer;
-    private KgeAdvertiser kgeAdvertiser;
-    private volatile boolean kgeReady;
     private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
 
     private final Runnable watchdog = new Runnable() {
@@ -46,14 +43,6 @@ public final class WebSyncService extends Service {
             if (current != null && current.tickAgeMs() > WATCHDOG_STALL_MS) {
                 recoverFromStall();
             }
-            // Restart the KGe BLE leg if Bluetooth came up after boot, and idle out old songs.
-            if (kgeAdvertiser != null && !kgeReady) {
-                kgeAdvertiser.start(WebSyncService.this,
-                        StoreBindingClient.deviceId(WebSyncService.this));
-                kgeServer.start();
-                kgeReady = kgeAdvertiser.isAdvertising();
-            }
-            KgeLyricStore.maintain(WebSyncService.this);
             watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS);
         }
     };
@@ -99,7 +88,6 @@ public final class WebSyncService extends Service {
         cloudSync.applyBarId(AppPreferences.boundBarId(this));
         publisher.start();
         publisher.setCloud(cloudSync);
-        startKge();
         startInForeground();
         watchdogHandler.removeCallbacks(watchdog);
         watchdogHandler.postDelayed(watchdog, WATCHDOG_INTERVAL_MS);
@@ -114,41 +102,9 @@ public final class WebSyncService extends Service {
         return START_STICKY;
     }
 
-    /** The KGe BLE leg: advertiser + GATT server + lyric accumulation into the store. */
-    private void startKge() {
-        if (kgeServer != null) return;
-        kgeAdvertiser = new KgeAdvertiser(what ->
-                DiagnosticLog.record(this, "Kge", what));
-        kgeServer = new KgeGattServer(this, new KgeGattServer.Listener() {
-            @Override public void onLyricEvent(String text, long startMs) {
-                KgeLyricStore.onLyricEvent(WebSyncService.this, text, startMs);
-            }
-
-            @Override public void onNotice(String what) {
-                DiagnosticLog.record(WebSyncService.this, "Kge", what);
-            }
-        });
-        kgeAdvertiser.start(this, StoreBindingClient.deviceId(this));
-        kgeServer.start();
-        kgeReady = kgeAdvertiser.isAdvertising();
-    }
-
-    static boolean kgeAdvertising() {
-        WebSyncService service = instance;
-        return service != null && service.kgeAdvertiser != null
-                && service.kgeAdvertiser.isAdvertising();
-    }
-
-    static boolean kgeConnected() {
-        WebSyncService service = instance;
-        return service != null && service.kgeServer != null && service.kgeServer.isConnected();
-    }
-
     @Override public void onDestroy() {
         instance = null;
         watchdogHandler.removeCallbacks(watchdog);
-        if (kgeServer != null) kgeServer.stop();
-        if (kgeAdvertiser != null) kgeAdvertiser.stop();
         if (cloudSync != null) cloudSync.stop();
         if (bindingClient != null) bindingClient.stop();
         if (publisher != null) publisher.stop();

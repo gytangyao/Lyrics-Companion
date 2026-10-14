@@ -22,9 +22,9 @@ final class StoreBindingClient {
     private static final String GATEWAY = "https://song.wemew.com";
     private static final String DEVICE_ENDPOINT = GATEWAY + "/shazam/getVipByDevice?deviceId=";
     private static final long POLL_INTERVAL_MS = 30_000L;
-    // TODO(test): 临时写死已在正式环境登记的测试设备码（门店 TOUCH.）。等后台为这台
-    // Android 设备登记自己的设备码后，删除本常量并恢复 DeviceIdentityStore 取值。
-    private static final String FIXED_DEVICE_ID = "968A7CEFDD0A";
+    // TODO(test): 临时写死本机设备码（正式登记流程打通后删除本常量并恢复
+    // DeviceIdentityStore 取值）。此码归属这台测试机；968A7CEFDD0A 已分配给他人。
+    private static final String FIXED_DEVICE_ID = "90E8A2C026C1";
 
     /** Outcome of one binding poll, or of parsing a stored response. */
     static final class BindingInfo {
