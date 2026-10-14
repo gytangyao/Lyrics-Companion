@@ -25,6 +25,9 @@ final class StoreBindingClient {
     private static final String GATEWAY = "https://song.wemew.com";
     private static final String DEVICE_ENDPOINT = GATEWAY + "/shazam/getVipByDevice?deviceId=";
     private static final long POLL_INTERVAL_MS = 30_000L;
+    // TODO(test): 临时写死已在正式环境登记的测试设备码（门店 TOUCH.）。等后台为这台
+    // Android 设备登记自己的设备码后，删除本常量并恢复 deviceId() 的派生逻辑。
+    private static final String FIXED_DEVICE_ID = "968A7CEFDD0A";
 
     /** Outcome of one binding poll, or of parsing a stored response. */
     static final class BindingInfo {
@@ -50,6 +53,13 @@ final class StoreBindingClient {
 
     /** Stable 12-hex device code, generated once from ANDROID_ID and persisted forever. */
     static synchronized String deviceId(Context context) {
+        // TODO(test): 临时返回写死的测试设备码；必须先于偏好读取返回，否则旧存储值会胜出。
+        return FIXED_DEVICE_ID;
+    }
+
+    /** 恢复派生逻辑时启用：首次从 ANDROID_ID 生成并永久持久化。 */
+    @SuppressWarnings("unused")
+    private static String derivedDeviceId(Context context) {
         String existing = AppPreferences.get(context).getString(
                 AppPreferences.KEY_DEVICE_ID, "");
         if (existing != null && existing.trim().length() == 12) return existing;
