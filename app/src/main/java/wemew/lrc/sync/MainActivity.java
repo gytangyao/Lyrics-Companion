@@ -341,6 +341,10 @@ public final class MainActivity extends AppCompatActivity {
             addPermissionRow(permissionRows, "全民K歌读取", false,
                     v -> openAccessibilitySettings());
         }
+        if (!isIgnoringBatteryOptimizations()) {
+            addPermissionRow(permissionRows, "后台不受限（电池白名单）", false,
+                    v -> requestBatteryWhitelist());
+        }
         boolean postNotifications = Build.VERSION.SDK_INT < 33
                 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 == PackageManager.PERMISSION_GRANTED;
@@ -632,6 +636,34 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
+    }
+
+    private boolean isIgnoringBatteryOptimizations() {
+        if (Build.VERSION.SDK_INT < 23) return true;
+        android.os.PowerManager power = (android.os.PowerManager)
+                getSystemService(POWER_SERVICE);
+        return power != null && power.isIgnoringBatteryOptimizations(getPackageName());
+    }
+
+    private void requestBatteryWhitelist() {
+        if (Build.VERSION.SDK_INT < 23) return;
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("允许后台运行")
+                .setMessage("系统省电策略会冻结后台并断开云端同步。下一步的系统弹窗里选择「允许」。"
+                        + "小米/红米手机还需在 设置 → 应用管理 → 微喵歌词同步 → 省电策略 选择「无限制」，"
+                        + "并在最近任务中下拉锁定本应用。")
+                .setPositiveButton("去设置", (dialog, which) -> {
+                    try {
+                        startActivity(new Intent(
+                                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:" + getPackageName())));
+                    } catch (Throwable error) {
+                        startSettingsActivity(new Intent(
+                                android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void openAccessibilitySettings() {

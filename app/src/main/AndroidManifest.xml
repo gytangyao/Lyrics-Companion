@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Cloud sync must survive OEM battery savers; the user confirms via the system dialog. -->
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Network interfaces are enumerated to show the LAN address of the lyric server. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- A manually entered lyric directory is read as a raw path: Android 6..10 needs this
