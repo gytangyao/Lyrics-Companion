@@ -33,6 +33,14 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
     private Handler handler;
     private String lastTrackJson;
     private String lastStateJson;
+    /** Elapsed-realtime of the last completed tick; the service watchdog reads this. */
+    private volatile long lastTickElapsedMs;
+
+    /** How long since the last publish tick; grows when the thread is wedged. */
+    long tickAgeMs() {
+        long last = lastTickElapsedMs;
+        return last <= 0L ? 0L : Math.max(0L, SystemClock.elapsedRealtime() - last);
+    }
 
     WebStatePublisher(Context context, WebSocketClients clients, CoverRegistry covers,
                       String serverVersion) {
@@ -44,6 +52,8 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
 
     void start() {
         stop();
+        // Seed the heartbeat so a publisher whose very first tick blocks is still detected.
+        lastTickElapsedMs = SystemClock.elapsedRealtime();
         thread = new HandlerThread("WebStatePublisher");
         thread.start();
         handler = new Handler(thread.getLooper());
@@ -64,6 +74,7 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
         } catch (Throwable error) {
             Log.w(TAG, "publish tick failed", error);
         }
+        lastTickElapsedMs = SystemClock.elapsedRealtime();
         if (handler != null) handler.postDelayed(this::tick, TICK_MS);
     }
 
@@ -132,8 +143,8 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
     }
 
     @Override public String trackJson() {
-        String json = lastTrackJson;
-        if (json != null) return json;
+        // Always freshly built: the connect snapshot must reflect "now", never a frame cached
+        // when the track first appeared (a stale position anchor makes a joining client jump).
         MusicSnapshot snapshot =
                 MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(context));
         boolean liveMode = snapshot.liveLyricActive;
@@ -145,8 +156,6 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
     }
 
     @Override public String stateJson() {
-        String json = lastStateJson;
-        if (json != null) return json;
         MusicSnapshot snapshot =
                 MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(context));
         lastStateJson = WebProtocolCodec.state(System.currentTimeMillis(), snapshot.active,

@@ -133,6 +133,13 @@ public final class MainActivity extends AppCompatActivity {
     @Override protected void onResume() {
         super.onResume();
         activityResumed = true;
+        // A package replace or an aggressive ROM kill leaves a remembered switch on but the
+        // service gone; opening the app is the natural "bring it back" path.
+        if (AppPreferences.webEnabled(this)) {
+            try {
+                WebSyncService.start(this);
+            } catch (Throwable ignored) { }
+        }
         ensureNotificationListenerConnected();
         handler.removeCallbacks(statusRefresh);
         handler.post(statusRefresh);

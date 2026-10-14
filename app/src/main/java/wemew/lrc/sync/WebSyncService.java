@@ -11,7 +11,9 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.net.wifi.WifiManager;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.text.format.Formatter;
 
 import androidx.core.app.NotificationCompat;
@@ -37,6 +39,8 @@ public final class WebSyncService extends Service {
     private static final String CHANNEL_ID = "web_sync";
     private static final int NOTIFICATION_ID = 41;
     private static final String ACTION_STOP = "wemew.lrc.sync.action.STOP";
+    /** NanoHTTPD socket read timeout; see {@link #startServer()} for why it is this long. */
+    private static final int SOCKET_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
     private static volatile WebSyncService instance;
 
@@ -44,6 +48,20 @@ public final class WebSyncService extends Service {
     private CoverRegistry covers;
     private WebStatePublisher publisher;
     private WebDisplayServer server;
+    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
+    /** If a publish tick stalls this long the whole stack is rebuilt and the stacks logged. */
+    private static final long WATCHDOG_STALL_MS = 20_000L;
+    private static final long WATCHDOG_INTERVAL_MS = 15_000L;
+
+    private final Runnable watchdog = new Runnable() {
+        @Override public void run() {
+            WebStatePublisher current = publisher;
+            if (current != null && current.tickAgeMs() > WATCHDOG_STALL_MS) {
+                recoverFromStall();
+            }
+            watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS);
+        }
+    };
 
     static void start(Context context) {
         Intent intent = new Intent(context, WebSyncService.class);
@@ -111,8 +129,40 @@ public final class WebSyncService extends Service {
         startServer();
         startInForeground();
         publisher.start();
+        watchdogHandler.removeCallbacks(watchdog);
+        watchdogHandler.postDelayed(watchdog, WATCHDOG_INTERVAL_MS);
         DiagnosticLog.record(this, "WebSync", "server started port="
                 + (server == null ? -1 : server.getListeningPort()));
+    }
+
+    /**
+     * The publisher tick is the heartbeat of the whole stack. When it stalls past the
+     * threshold, every client is already frozen; rather than staying wedged, capture every
+     * thread stack (the root cause goes into the diagnostic log) and rebuild the server.
+     */
+    private void recoverFromStall() {
+        try {
+            StringBuilder stacks = new StringBuilder();
+            for (Thread thread : Thread.getAllStackTraces().keySet()) {
+                StackTraceElement[] frames = Thread.getAllStackTraces().get(thread);
+                if (frames == null || frames.length == 0) continue;
+                stacks.append(thread.getName()).append(": ");
+                for (int i = 0; i < Math.min(6, frames.length); i++) {
+                    stacks.append(frames[i].toString()).append(" | ");
+                }
+                stacks.append('\n');
+            }
+            DiagnosticLog.record(this, "WebSync",
+                    "publisher stalled " + publisher.tickAgeMs() + "ms; rebuilding. stacks:\n"
+                            + stacks);
+        } catch (Throwable ignored) { }
+        if (publisher != null) publisher.stop();
+        if (server != null) {
+            server.stop();
+            server = null;
+        }
+        startServer();
+        if (publisher != null) publisher.start();
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -125,6 +175,7 @@ public final class WebSyncService extends Service {
 
     @Override public void onDestroy() {
         instance = null;
+        watchdogHandler.removeCallbacks(watchdog);
         if (publisher != null) publisher.stop();
         if (server != null) {
             server.stop();
@@ -145,7 +196,11 @@ public final class WebSyncService extends Service {
             WebDisplayServer candidateServer = new WebDisplayServer(candidate, this, clients,
                     publisher, publisher);
             try {
-                candidateServer.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false);
+                // A web socket rides the HTTP session thread, so NanoHTTPD's socket read
+                // timeout is also the web-socket idle limit. SOCKET_READ_TIMEOUT (5 s) killed
+                // idle display clients every 5 seconds; 10 minutes lets the client's 5-second
+                // application pings keep the read alive while still reaping dead HTTP peers.
+                candidateServer.start(SOCKET_IDLE_TIMEOUT_MS, false);
                 server = candidateServer;
                 return;
             } catch (IOException error) {
