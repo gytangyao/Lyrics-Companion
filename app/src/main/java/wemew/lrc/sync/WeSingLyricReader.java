@@ -188,7 +188,7 @@ public final class WeSingLyricReader extends AccessibilityService {
     static List<Row> extractLadder(List<Row> bandRows) {
         if (bandRows.size() < 2) return new ArrayList<>(bandRows);
         List<Row> byHeight = new ArrayList<>(bandRows);
-        byHeight.sort((a, b) -> Integer.compare(a.height, b.height));
+        java.util.Collections.sort(byHeight, (a, b) -> Integer.compare(a.height, b.height));
         int medianHeight = byHeight.get(byHeight.size() / 2).height;
         List<Row> sized = new ArrayList<>();
         for (Row row : bandRows) {
@@ -198,7 +198,7 @@ public final class WeSingLyricReader extends AccessibilityService {
         }
         if (sized.size() < 2) return sized;
         List<Row> byTop = new ArrayList<>(sized);
-        byTop.sort((a, b) -> Integer.compare(a.top, b.top));
+        java.util.Collections.sort(byTop, (a, b) -> Integer.compare(a.top, b.top));
         List<Integer> gaps = new ArrayList<>();
         for (int i = 1; i < byTop.size(); i++) {
             int gap = byTop.get(i).top - byTop.get(i - 1).top;
