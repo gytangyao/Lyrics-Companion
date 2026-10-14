@@ -35,11 +35,17 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
     private String lastStateJson;
     /** Elapsed-realtime of the last completed tick; the service watchdog reads this. */
     private volatile long lastTickElapsedMs;
+    /** Human-readable summary of the last pushed frame, for the settings page. */
+    private volatile String lastPushSummary = "";
 
     /** How long since the last publish tick; grows when the thread is wedged. */
     long tickAgeMs() {
         long last = lastTickElapsedMs;
         return last <= 0L ? 0L : Math.max(0L, SystemClock.elapsedRealtime() - last);
+    }
+
+    String lastPushSummary() {
+        return lastPushSummary;
     }
 
     WebStatePublisher(Context context, WebSocketClients clients, CoverRegistry covers,
@@ -104,15 +110,18 @@ final class WebStatePublisher implements WebSyncSocket.Hooks, WebDisplayServer.R
                     liveMode, artVersion);
             lastTrackJson = WebProtocolCodec.track(nowWall, payload);
             clients.broadcast(lastTrackJson);
+            lastPushSummary = "track " + snapshot.title;
         }
         if (decision.state) {
             lastStateJson = WebProtocolCodec.state(nowWall, snapshot.active, snapshot.playing,
                     snapshot.positionMs, speed, snapshot.durationMs, true);
             clients.broadcast(lastStateJson);
+            if (!decision.track) lastPushSummary = "state @" + snapshot.positionMs + "ms";
         }
         if (decision.line && liveMode) {
             clients.broadcast(WebProtocolCodec.line(nowWall, snapshot.lyrics.lyric,
                     snapshot.lyrics.nextLyric, snapshot.lyrics.translatedLyric));
+            lastPushSummary = "line " + snapshot.lyrics.lyric;
         }
     }
 

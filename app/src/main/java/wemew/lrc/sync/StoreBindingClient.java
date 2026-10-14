@@ -1,23 +1,20 @@
 package wemew.lrc.sync;
 
 import android.content.Context;
+import android.content.Intent;
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.provider.Settings;
 import android.util.Log;
 
 import org.json.JSONObject;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.Locale;
-import java.util.UUID;
-
 /**
- * Store binding following the wemew device-identity flow (the nbox pattern): the device shows a
- * stable 12-hex device code, the store registers that code in the wemew admin, and this client
- * polls the gateway until the server reports the binding as
- * {@code resultMsg:{enable:true, barId, barName}}. No code is ever entered on the device.
+ * Store binding following the wemew device-identity flow (the nbox pattern): the device shows
+ * a stable 12-hex device code, the store registers that code in the wemew admin, and this
+ * client polls the gateway until the server reports a non-empty barId. No code is ever
+ * entered on the device. Every successful poll also feeds the gateway's HTTP Date into the
+ * license rollback detector, and a binding change nudges the service so a gated server
+ * comes back the moment a store registers the device.
  */
 final class StoreBindingClient {
     private static final String TAG = "StoreBinding";
@@ -26,7 +23,7 @@ final class StoreBindingClient {
     private static final String DEVICE_ENDPOINT = GATEWAY + "/shazam/getVipByDevice?deviceId=";
     private static final long POLL_INTERVAL_MS = 30_000L;
     // TODO(test): 临时写死已在正式环境登记的测试设备码（门店 TOUCH.）。等后台为这台
-    // Android 设备登记自己的设备码后，删除本常量并恢复 deviceId() 的派生逻辑。
+    // Android 设备登记自己的设备码后，删除本常量并恢复 DeviceIdentityStore 取值。
     private static final String FIXED_DEVICE_ID = "968A7CEFDD0A";
 
     /** Outcome of one binding poll, or of parsing a stored response. */
@@ -51,42 +48,13 @@ final class StoreBindingClient {
         this.context = context.getApplicationContext();
     }
 
-    /** Stable 12-hex device code, generated once from ANDROID_ID and persisted forever. */
+    /**
+     * The canonical device code: the pinned test id while the admin side has not registered
+     * this handset yet, otherwise the uninstall-surviving {@link DeviceIdentityStore} value.
+     */
     static synchronized String deviceId(Context context) {
-        // TODO(test): 临时返回写死的测试设备码；必须先于偏好读取返回，否则旧存储值会胜出。
-        return FIXED_DEVICE_ID;
-    }
-
-    /** 恢复派生逻辑时启用：首次从 ANDROID_ID 生成并永久持久化。 */
-    @SuppressWarnings("unused")
-    private static String derivedDeviceId(Context context) {
-        String existing = AppPreferences.get(context).getString(
-                AppPreferences.KEY_DEVICE_ID, "");
-        if (existing != null && existing.trim().length() == 12) return existing;
-        String generated = deriveDeviceId(Settings.Secure.getString(
-                context.getContentResolver(), Settings.Secure.ANDROID_ID));
-        AppPreferences.get(context).edit().putString(AppPreferences.KEY_DEVICE_ID,
-                generated).apply();
-        DiagnosticLog.record(context, "Binding", "device id generated: " + generated);
-        return generated;
-    }
-
-    /** SHA-256 of any seed, first 12 hex chars upper-cased — the nbox DeviceHelper shape. */
-    private static String deriveDeviceId(String seed) {
-        try {
-            String safeSeed = seed == null || seed.trim().isEmpty()
-                    ? UUID.randomUUID().toString() : seed;
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(safeSeed.getBytes(StandardCharsets.UTF_8));
-            StringBuilder hex = new StringBuilder();
-            for (int i = 0; i < hash.length && hex.length() < 12; i++) {
-                hex.append(String.format(Locale.US, "%02X", hash[i]));
-            }
-            return hex.substring(0, 12);
-        } catch (Throwable error) {
-            return UUID.randomUUID().toString().replace("-", "")
-                    .substring(0, 12).toUpperCase(Locale.US);
-        }
+        return FIXED_DEVICE_ID != null ? FIXED_DEVICE_ID
+                : DeviceIdentityStore.deviceId(context);
     }
 
     /**
@@ -135,17 +103,40 @@ final class StoreBindingClient {
 
     private void poll() {
         try {
+            long[] dateMs = new long[1];
             String id = deviceId(context);
-            String body = LyricHttp.get(DEVICE_ENDPOINT + LyricHttp.encode(id), null);
-            BindingInfo info = parseBinding(body);
+            BindingInfo info = parseBinding(
+                    LyricHttp.get(DEVICE_ENDPOINT + LyricHttp.encode(id), null, dateMs));
+            if (dateMs[0] > 0L) LicenseGate.recordServerTime(context, dateMs[0]);
+            if (!info.bound) {
+                // Reinstall arbitration: the watermark may remember the registered id while
+                // the derived one changed. Probe it; a bound answer adopts it everywhere.
+                String remembered = DeviceIdentityStore.watermarkId(context);
+                if (remembered != null && !remembered.equals(id)) {
+                    BindingInfo rememberedInfo = parseBinding(
+                            LyricHttp.get(DEVICE_ENDPOINT + LyricHttp.encode(remembered), null));
+                    if (rememberedInfo.bound) {
+                        DeviceIdentityStore.adopt(context, remembered,
+                                DeviceIdentityStore.trialStartMs(context));
+                        info = rememberedInfo;
+                        DiagnosticLog.record(context, "Binding",
+                                "reinstalled identity recovered from watermark: " + remembered);
+                    }
+                }
+            }
             boolean wasBound = !AppPreferences.boundBarId(context).isEmpty();
             AppPreferences.putBinding(context, info.barId, info.barName,
                     System.currentTimeMillis(), "");
             if (info.bound && !wasBound) {
                 DiagnosticLog.record(context, "Binding",
                         "门店已绑定：" + info.barName + " (" + info.barId + ")");
+                // A gated (trial-expired) server must come back the moment binding lands.
+                context.startService(new Intent(context, WebSyncService.class)
+                        .setAction(WebSyncService.ACTION_REEVALUATE));
             } else if (!info.bound && wasBound) {
                 DiagnosticLog.record(context, "Binding", "store binding removed");
+                context.startService(new Intent(context, WebSyncService.class)
+                        .setAction(WebSyncService.ACTION_REEVALUATE));
             }
         } catch (Throwable error) {
             Log.w(TAG, "binding poll failed", error);

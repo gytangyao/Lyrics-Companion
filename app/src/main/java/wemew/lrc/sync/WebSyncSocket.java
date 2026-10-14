@@ -27,6 +27,11 @@ final class WebSyncSocket extends NanoWSD.WebSocket {
 
     private final WebSocketClients clients;
     private final Hooks hooks;
+    /** Name from the client's hello frame; blank until it introduces itself. */
+    volatile String clientName = "";
+    final long connectedAtElapsedMs = android.os.SystemClock.elapsedRealtime();
+    volatile long lastActivityElapsedMs = connectedAtElapsedMs;
+    volatile long sentFrames;
 
     WebSyncSocket(NanoHTTPD.IHTTPSession handshake, WebSocketClients clients, Hooks hooks) {
         super(handshake);
@@ -52,8 +57,14 @@ final class WebSyncSocket extends NanoWSD.WebSocket {
         if (WebProtocol.TYPE_PING.equals(inbound.type)) {
             // The echoed t0 is the envelope ts of the ping, per the protocol doc.
             trySend(WebProtocolCodec.pong(inbound.ts, System.currentTimeMillis()));
+        } else if (WebProtocol.TYPE_HELLO.equals(inbound.type) && inbound.data != null) {
+            org.json.JSONObject client = inbound.data.optJSONObject("client");
+            if (client != null) {
+                String name = client.optString("name", "");
+                if (name != null && !name.trim().isEmpty()) clientName = name.trim();
+            }
         }
-        // hello needs no reply (welcome already went out on open); unknown types are ignored.
+        // Unknown types are ignored per the protocol's compatibility rule.
     }
 
     @Override protected void onClose(NanoWSD.WebSocketFrame.CloseCode code, String reason,
@@ -74,6 +85,8 @@ final class WebSyncSocket extends NanoWSD.WebSocket {
         if (message == null) return false;
         try {
             send(message);
+            sentFrames++;
+            lastActivityElapsedMs = android.os.SystemClock.elapsedRealtime();
             return true;
         } catch (Throwable error) {
             clients.remove(this);

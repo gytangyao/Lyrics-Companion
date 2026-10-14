@@ -13,6 +13,17 @@ android {
     namespace "wemew.lrc.sync"
     compileSdk 36
 
+    // Single-sources docs/web-protocol.md into the APK so /protocol always matches the repo.
+    tasks.register("syncProtocolDoc", Copy) {
+        from(rootProject.file("docs/web-protocol.md"))
+        into(layout.projectDirectory.dir("src/main/assets/web"))
+        rename { "protocol.md" }
+    }
+
+    tasks.named("preBuild") {
+        dependsOn("syncProtocolDoc")
+    }
+
     defaultConfig {
         applicationId "wemew.lrc.sync"
         minSdk 19

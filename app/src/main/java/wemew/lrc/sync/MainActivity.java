@@ -46,6 +46,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextView bindingStore;
     private TextView bindingDevice;
     private TextView bindingMeta;
+    private TextView trialStatus;
     private TextView webStatus;
     private LinearLayout webUrlRows;
     private TextView musicTitle;
@@ -161,6 +162,9 @@ public final class MainActivity extends AppCompatActivity {
         bindingMeta = text("", 12, 0xFF66788F, false);
         bindingMeta.setPadding(0, dp(2), 0, 0);
         bindingCard.addView(bindingMeta);
+        trialStatus = text("", 12, 0xFFFFCA66, false);
+        trialStatus.setPadding(0, dp(2), 0, 0);
+        bindingCard.addView(trialStatus);
 
         // ---- 同步状态 ----
         LinearLayout syncCard = card();
@@ -236,16 +240,43 @@ public final class MainActivity extends AppCompatActivity {
         }
         bindingMeta.setText(meta.toString());
         bindingMeta.setTextColor(checkFailed ? 0xFFFFCA66 : 0xFF66788F);
+        String trial = LicenseGate.trialSummary(this);
+        trialStatus.setText(trial == null ? "" : trial);
     }
 
     private void refreshSync() {
         boolean running = WebSyncService.isRunning();
+        int port = WebSyncService.port();
         webStatus.setText(running
-                ? "服务运行中 · 已连接显示端 " + WebSyncService.clientCount() + " 个"
+                ? "服务运行中 · 端口 " + port + " · 已连接显示端 " + WebSyncService.clientCount() + " 个"
                 : "服务未运行");
         webStatus.setTextColor(running ? 0xFF6EE7F2 : 0xFFFFCA66);
         webUrlRows.removeAllViews();
         if (!running) return;
+
+        // 每个显示端一行：hello 上报的名称、连接时长、最近活动。
+        for (WebSyncSocket socket : WebSyncService.clientSockets()) {
+            String name = socket.clientName == null || socket.clientName.isEmpty()
+                    ? "未命名显示端" : socket.clientName;
+            long connectedMinutes = Math.max(0L, (android.os.SystemClock.elapsedRealtime()
+                    - socket.connectedAtElapsedMs) / 60_000L);
+            long activeSeconds = Math.max(0L, (android.os.SystemClock.elapsedRealtime()
+                    - socket.lastActivityElapsedMs) / 1000L);
+            TextView clientLine = text("· " + name + " · 已连 " + connectedMinutes + " 分钟"
+                            + " · 活跃 " + (activeSeconds < 90 ? activeSeconds + " 秒前"
+                            : activeSeconds / 60 + " 分钟前") + " · 下发 " + socket.sentFrames + " 帧",
+                    12, 0xFF9EAFBF, false);
+            clientLine.setPadding(dp(2), dp(2), 0, 0);
+            webUrlRows.addView(clientLine);
+        }
+
+        String push = WebSyncService.pushSummary();
+        if (push != null && !push.isEmpty()) {
+            TextView pushLine = text("最近推送：" + push, 12, 0xFF66788F, false);
+            pushLine.setPadding(dp(2), dp(4), 0, 0);
+            webUrlRows.addView(pushLine);
+        }
+
         List<String> urls = WebSyncService.lanUrls();
         if (urls.isEmpty()) {
             TextView none = text("未找到局域网地址；请确认设备与显示端在同一网络", 12,

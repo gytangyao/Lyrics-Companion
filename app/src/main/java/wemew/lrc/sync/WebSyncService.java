@@ -38,6 +38,8 @@ import fi.iki.elonen.NanoHTTPD;
 public final class WebSyncService extends Service {
     private static final String CHANNEL_ID = "web_sync";
     private static final int NOTIFICATION_ID = 41;
+    /** Binding-state changes ask the service to re-run the license gate. */
+    static final String ACTION_REEVALUATE = "wemew.lrc.sync.action.REEVALUATE";
     /** NanoHTTPD socket read timeout; see {@link #startServer()} for why it is this long. */
     private static final int SOCKET_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -56,9 +58,12 @@ public final class WebSyncService extends Service {
     private final Runnable watchdog = new Runnable() {
         @Override public void run() {
             WebStatePublisher current = publisher;
-            if (current != null && current.tickAgeMs() > WATCHDOG_STALL_MS) {
+            if (current != null && server != null
+                    && current.tickAgeMs() > WATCHDOG_STALL_MS) {
                 recoverFromStall();
             }
+            // Trials expire and bindings land between ticks; keep the server in step.
+            evaluateGate();
             watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS);
         }
     };
@@ -80,9 +85,28 @@ public final class WebSyncService extends Service {
         return instance != null;
     }
 
+    /** Actual listening port, or 0 when the server is not running. */
+    static int port() {
+        WebSyncService service = instance;
+        return service == null || service.server == null
+                ? 0 : service.server.getListeningPort();
+    }
+
     static int clientCount() {
         WebSyncService service = instance;
         return service == null || service.clients == null ? 0 : service.clients.size();
+    }
+
+    static java.util.List<WebSyncSocket> clientSockets() {
+        WebSyncService service = instance;
+        return service == null || service.clients == null
+                ? java.util.Collections.emptyList() : service.clients.list();
+    }
+
+    static String pushSummary() {
+        WebSyncService service = instance;
+        return service == null || service.publisher == null
+                ? "" : service.publisher.lastPushSummary();
     }
 
     /** Best-effort LAN URLs for the settings page; empty when the server is not running. */
@@ -126,15 +150,45 @@ public final class WebSyncService extends Service {
         clients = new WebSocketClients();
         covers = new CoverRegistry();
         publisher = new WebStatePublisher(this, clients, covers, versionName());
-        startServer();
-        startInForeground();
-        publisher.start();
+        // Binding always runs — it is also the self-healing path back for a gated device.
         bindingClient = new StoreBindingClient(this);
         bindingClient.start();
+        startInForeground();
+        if (LicenseGate.serviceAllowed(this)) {
+            startServer();
+            publisher.start();
+        } else {
+            DiagnosticLog.record(this, "WebSync", "license gate closed; server withheld");
+        }
         watchdogHandler.removeCallbacks(watchdog);
         watchdogHandler.postDelayed(watchdog, WATCHDOG_INTERVAL_MS);
-        DiagnosticLog.record(this, "WebSync", "server started port="
+        DiagnosticLog.record(this, "WebSync", "service started port="
                 + (server == null ? -1 : server.getListeningPort()));
+    }
+
+    /** Starts or stops the sync server to match the license verdict; idempotent. */
+    private void evaluateGate() {
+        boolean allowed = LicenseGate.serviceAllowed(this);
+        if (allowed && server == null) {
+            startServer();
+            if (publisher != null) publisher.start();
+            startInForeground();
+            DiagnosticLog.record(this, "WebSync", "license gate opened; server started port="
+                    + (server == null ? -1 : server.getListeningPort()));
+        } else if (!allowed && server != null) {
+            if (publisher != null) publisher.stop();
+            server.stop();
+            server = null;
+            startInForeground();
+            DiagnosticLog.record(this, "WebSync", "license gate closed; server stopped");
+        }
+    }
+
+    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && ACTION_REEVALUATE.equals(intent.getAction())) {
+            evaluateGate();
+        }
+        return START_STICKY;
     }
 
     /**
@@ -163,12 +217,10 @@ public final class WebSyncService extends Service {
             server.stop();
             server = null;
         }
-        startServer();
-        if (publisher != null) publisher.start();
-    }
-
-    @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        return START_STICKY;
+        if (LicenseGate.serviceAllowed(this)) {
+            startServer();
+            if (publisher != null) publisher.start();
+        }
     }
 
     @Override public void onDestroy() {
@@ -191,7 +243,7 @@ public final class WebSyncService extends Service {
     private void startServer() {
         int first = WebProtocol.DEFAULT_PORT;
         for (int candidate = first; candidate < first + 10; candidate++) {
-            WebDisplayServer candidateServer = new WebDisplayServer(candidate, clients,
+            WebDisplayServer candidateServer = new WebDisplayServer(candidate, this, clients,
                     publisher, publisher);
             try {
                 // A web socket rides the HTTP session thread, so NanoHTTPD's socket read
@@ -230,9 +282,9 @@ public final class WebSyncService extends Service {
     }
 
     private Notification buildNotification() {
-        List<String> urls = lanUrls();
-        String text = urls.isEmpty() ? getString(R.string.service_notification_title)
-                : urls.get(0);
+        String summary = LicenseGate.trialSummary(this);
+        String text = summary != null ? summary
+                : (server == null ? "等待授权…" : primaryUrl());
         Intent open = new Intent(this, MainActivity.class);
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0, open,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -244,6 +296,11 @@ public final class WebSyncService extends Service {
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .build();
+    }
+
+    private String primaryUrl() {
+        List<String> urls = lanUrls();
+        return urls.isEmpty() ? getString(R.string.service_notification_title) : urls.get(0);
     }
 
     private String versionName() {

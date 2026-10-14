@@ -12,11 +12,21 @@ final class LyricHttp {
     private LyricHttp() {}
 
     static String get(String address, String referer) throws Exception {
-        return request("GET", address, referer, null);
+        return request("GET", address, referer, null, null);
+    }
+
+    /** GET that also reports the server's Date header (epoch ms, 0 when absent). */
+    static String get(String address, String referer, long[] dateOutMs) throws Exception {
+        return request("GET", address, referer, null, dateOutMs);
     }
 
     static String request(String method, String address, String referer, String body)
             throws Exception {
+        return request(method, address, referer, body, null);
+    }
+
+    static String request(String method, String address, String referer, String body,
+                          long[] dateOutMs) throws Exception {
         if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
         HttpURLConnection connection = HttpCompat.open(address);
         try {
@@ -41,6 +51,9 @@ final class LyricHttp {
                     ? connection.getInputStream() : connection.getErrorStream());
             if (status < 200 || status >= 300) {
                 throw new IllegalStateException("HTTP " + status + " from " + address);
+            }
+            if (dateOutMs != null && dateOutMs.length > 0) {
+                dateOutMs[0] = connection.getDate();
             }
             if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
             return response;

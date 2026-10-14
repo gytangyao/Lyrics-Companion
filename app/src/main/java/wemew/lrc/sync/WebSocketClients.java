@@ -1,5 +1,7 @@
 package wemew.lrc.sync;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -19,6 +21,11 @@ final class WebSocketClients {
 
     int size() {
         return clients.size();
+    }
+
+    /** Current sockets for the settings page; a point-in-time copy. */
+    List<WebSyncSocket> list() {
+        return new ArrayList<>(clients);
     }
 
     void broadcast(String message) {
