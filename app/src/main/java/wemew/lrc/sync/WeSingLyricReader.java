@@ -44,7 +44,6 @@ public final class WeSingLyricReader extends AccessibilityService {
     /** Lyric lines in start order: text → clock value when the line reached the ladder top. */
     private final LinkedHashMap<String, Long> lineStarts = new LinkedHashMap<>();
     /** The current ladder-top line; a change means the previous line ended and this started. */
-    private String lastLadderTop = "";
 
     static boolean enabled(Context context) {
         String raw = Settings.Secure.getString(context.getContentResolver(),
@@ -97,7 +96,6 @@ public final class WeSingLyricReader extends AccessibilityService {
                 || (lastPositionMs >= 0L && clock.positionMs < lastPositionMs - 3_000L);
         if (newSong) {
             lineStarts.clear();
-            lastLadderTop = "";
             songKey = title + "/" + clock.durationMs;
             lastDurationMs = -1L;
             if (!TextUtils.isEmpty(lastTitle) && !TextUtils.equals(title, lastTitle)) {
@@ -109,47 +107,28 @@ public final class WeSingLyricReader extends AccessibilityService {
         lastDurationMs = clock.durationMs;
         lastTitle = title;
 
-        // The ladder top is the current line; when it changes, the new top line just started.
-        // Fast scrolls can advance two rows at once — stamp both, newest last.
-        if (!ladder.isEmpty()) {
-            String top = ladder.get(0).text;
-            if (!TextUtils.equals(top, lastLadderTop)) {
-                if (!lineStarts.containsKey(top) && !lastLadderTop.isEmpty()
-                        && ladderHas(ladder, lastLadderTop) && ladder.indexOf(
-                                findRow(ladder, lastLadderTop)) >= 2) {
-                    // The previous top is still on screen two slots down: one line was skipped.
-                    lineStarts.put(lastLadderTop, clock.positionMs - 3_000L);
-                }
-                lineStarts.put(top, clock.positionMs + lineStarts.size());
-                lastLadderTop = top;
+        // The karaoke view exposes the full ladder but never scrolls it and never marks the
+        // current line through node bounds (40-frame proof: heights stay 54/71 all song —
+        // the enlarged current line is canvas-drawn). So: collect every ladder row in tree
+        // order, spread the starts evenly over the song, and let the clock pick the line.
+        for (Row row : ladder) {
+            if (!lineStarts.containsKey(row.text)) {
+                lineStarts.put(row.text, -1L);
             }
         }
-
-        List<LrcTimeline.Line> lines = new ArrayList<>(lineStarts.size());
-        long previousStart = -1L;
-        String previousText = null;
-        for (Map.Entry<String, Long> entry : lineStarts.entrySet()) {
-            if (previousStart >= 0L && previousText != null) {
-                lines.add(new LrcTimeline.Line(previousStart,
-                        Math.max(1000L, entry.getValue() - previousStart), previousText));
+        List<String> orderedLines = new ArrayList<>(lineStarts.keySet());
+        long spanMs = lastDurationMs > 0L ? lastDurationMs
+                : Math.max(30_000L, clock.positionMs + 30_000L);
+        LrcTimeline timeline = LrcTimeline.EMPTY;
+        if (!orderedLines.isEmpty()) {
+            long interval = Math.max(1000L, spanMs / orderedLines.size());
+            List<LrcTimeline.Line> lines = new ArrayList<>(orderedLines.size());
+            for (int i = 0; i < orderedLines.size(); i++) {
+                lines.add(new LrcTimeline.Line(i * interval, interval, orderedLines.get(i)));
             }
-            previousStart = entry.getValue();
-            previousText = entry.getKey();
+            timeline = LrcTimeline.fromTimedLines(lines);
         }
-        if (previousText != null) {
-            lines.add(new LrcTimeline.Line(previousStart, 3000L, previousText));
-        }
-        LrcTimeline timeline = lines.isEmpty() ? LrcTimeline.EMPTY
-                : LrcTimeline.fromTimedLines(lines);
-        String currentLine = previousText == null ? "" : previousText;
-
-        // 同步取证：每帧记录时钟、梯顶与时间轴命中，与手机截图对时。
-        if (!lineStarts.isEmpty()) {
-            LrcTimeline.At at = timeline.at(clock.positionMs);
-            DiagnosticLog.record(this, "WeSing", "tick clock=" + (clock.positionMs / 1000)
-                    + "s lines=" + lineStarts.size() + " top=[" + lastLadderTop
-                    + "] hitLine=[" + at.lyric + "] hitStart=" + at.lineStartMs);
-        }
+        String currentLine = timeline.isEmpty() ? "" : timeline.at(clock.positionMs).lyric;
 
         MusicPlaybackData data = new MusicPlaybackData(
                 "", title == null ? "" : title, "", null, "", "",
@@ -241,19 +220,7 @@ public final class WeSingLyricReader extends AccessibilityService {
         }
     }
 
-    private boolean ladderHas(List<Row> ladder, String text) {
-        for (Row row : ladder) {
-            if (row.text.equals(text)) return true;
-        }
-        return false;
-    }
 
-    private Row findRow(List<Row> ladder, String text) {
-        for (Row row : ladder) {
-            if (row.text.equals(text)) return row;
-        }
-        return null;
-    }
 
     /** Lyric-candidate filter: Chinese-ish sentence, not chrome, not the title, not a clock. */
     static boolean isLyricLine(String raw, String title) {
