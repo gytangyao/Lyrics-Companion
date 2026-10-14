@@ -38,7 +38,6 @@ import fi.iki.elonen.NanoHTTPD;
 public final class WebSyncService extends Service {
     private static final String CHANNEL_ID = "web_sync";
     private static final int NOTIFICATION_ID = 41;
-    private static final String ACTION_STOP = "wemew.lrc.sync.action.STOP";
     /** NanoHTTPD socket read timeout; see {@link #startServer()} for why it is this long. */
     private static final int SOCKET_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -48,6 +47,7 @@ public final class WebSyncService extends Service {
     private CoverRegistry covers;
     private WebStatePublisher publisher;
     private WebDisplayServer server;
+    private StoreBindingClient bindingClient;
     private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
     /** If a publish tick stalls this long the whole stack is rebuilt and the stacks logged. */
     private static final long WATCHDOG_STALL_MS = 20_000L;
@@ -129,6 +129,8 @@ public final class WebSyncService extends Service {
         startServer();
         startInForeground();
         publisher.start();
+        bindingClient = new StoreBindingClient(this);
+        bindingClient.start();
         watchdogHandler.removeCallbacks(watchdog);
         watchdogHandler.postDelayed(watchdog, WATCHDOG_INTERVAL_MS);
         DiagnosticLog.record(this, "WebSync", "server started port="
@@ -166,16 +168,13 @@ public final class WebSyncService extends Service {
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && ACTION_STOP.equals(intent.getAction())) {
-            stopSelf();
-            return START_NOT_STICKY;
-        }
         return START_STICKY;
     }
 
     @Override public void onDestroy() {
         instance = null;
         watchdogHandler.removeCallbacks(watchdog);
+        if (bindingClient != null) bindingClient.stop();
         if (publisher != null) publisher.stop();
         if (server != null) {
             server.stop();
@@ -190,10 +189,9 @@ public final class WebSyncService extends Service {
     }
 
     private void startServer() {
-        int preferred = AppPreferences.webPort(this);
-        int first = preferred > 0 ? preferred : WebProtocol.DEFAULT_PORT;
+        int first = WebProtocol.DEFAULT_PORT;
         for (int candidate = first; candidate < first + 10; candidate++) {
-            WebDisplayServer candidateServer = new WebDisplayServer(candidate, this, clients,
+            WebDisplayServer candidateServer = new WebDisplayServer(candidate, clients,
                     publisher, publisher);
             try {
                 // A web socket rides the HTTP session thread, so NanoHTTPD's socket read
@@ -238,9 +236,6 @@ public final class WebSyncService extends Service {
         Intent open = new Intent(this, MainActivity.class);
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0, open,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Intent stop = new Intent(this, WebSyncService.class).setAction(ACTION_STOP);
-        PendingIntent stopIntent = PendingIntent.getService(this, 1, stop,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(getString(R.string.service_notification_title))
@@ -248,7 +243,6 @@ public final class WebSyncService extends Service {
                 .setContentIntent(contentIntent)
                 .setOngoing(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
-                .addAction(0, "停止", stopIntent)
                 .build();
     }
 

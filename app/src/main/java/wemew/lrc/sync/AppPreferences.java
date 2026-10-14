@@ -32,12 +32,12 @@ final class AppPreferences {
     static final String KEY_LYRIC_CACHE_POLICY = "lyric_cache_policy";
     static final String KEY_LYRIC_CACHE_LIMIT_MB = "lyric_cache_limit_mb";
     static final String KEY_THEME_MODE = "theme_mode";
-    /** Settings-page scale; deliberately independent from lyric rendering scale. */
-    static final String KEY_SETTINGS_UI_SCALE = "settings_ui_scale";
-    /** The LAN web server switch; off until the user opts in. */
-    static final String KEY_WEB_ENABLED = "web_enabled";
-    /** Preferred web server port; 0 means auto (first free port from 8765 up). */
-    static final String KEY_WEB_PORT = "web_port";
+    /** Stable device identity the store registers server-side (wemew binding). */
+    static final String KEY_DEVICE_ID = "device_id";
+    static final String KEY_BOUND_BAR_ID = "bound_bar_id";
+    static final String KEY_BOUND_BAR_NAME = "bound_bar_name";
+    static final String KEY_BINDING_LAST_CHECK_MS = "binding_last_check_ms";
+    static final String KEY_BINDING_LAST_ERROR = "binding_last_error";
 
     private AppPreferences() {}
 
@@ -242,32 +242,39 @@ final class AppPreferences {
         return themeMode(context);
     }
 
-    static int settingsUiScale(Context context) {
-        int value = get(context).getInt(KEY_SETTINGS_UI_SCALE, 100);
-        return value == 150 || value == 200 ? value : 100;
+    static String deviceId(Context context, String generatedId) {
+        String existing = get(context).getString(KEY_DEVICE_ID, "");
+        if (existing != null && !existing.isEmpty()) return existing;
+        get(context).edit().putString(KEY_DEVICE_ID,
+                generatedId == null ? "" : generatedId).apply();
+        return generatedId == null ? "" : generatedId;
     }
 
-    static void setSettingsUiScale(Context context, int percent) {
-        int safe = percent == 150 || percent == 200 ? percent : 100;
-        get(context).edit().putInt(KEY_SETTINGS_UI_SCALE, safe).apply();
+    static String boundBarId(Context context) {
+        return get(context).getString(KEY_BOUND_BAR_ID, "");
     }
 
-    static boolean webEnabled(Context context) {
-        return get(context).getBoolean(KEY_WEB_ENABLED, false);
+    static String boundBarName(Context context) {
+        return get(context).getString(KEY_BOUND_BAR_NAME, "");
     }
 
-    static void setWebEnabled(Context context, boolean enabled) {
-        get(context).edit().putBoolean(KEY_WEB_ENABLED, enabled).apply();
+    static long bindingLastCheckMs(Context context) {
+        return get(context).getLong(KEY_BINDING_LAST_CHECK_MS, 0L);
     }
 
-    /** Preferred port, 0 for auto (first free port from 8765 upwards). */
-    static int webPort(Context context) {
-        return Math.max(0, Math.min(65535, get(context).getInt(KEY_WEB_PORT, 0)));
+    static String bindingLastError(Context context) {
+        return get(context).getString(KEY_BINDING_LAST_ERROR, "");
     }
 
-    static void setWebPort(Context context, int port) {
-        get(context).edit().putInt(KEY_WEB_PORT,
-                Math.max(0, Math.min(65535, port))).apply();
+    /** Written by the binding poller; the UI only ever reads the cached values. */
+    static void putBinding(Context context, String barId, String barName, long checkedAtMs,
+                           String lastError) {
+        get(context).edit()
+                .putString(KEY_BOUND_BAR_ID, barId == null ? "" : barId)
+                .putString(KEY_BOUND_BAR_NAME, barName == null ? "" : barName)
+                .putLong(KEY_BINDING_LAST_CHECK_MS, checkedAtMs)
+                .putString(KEY_BINDING_LAST_ERROR, lastError == null ? "" : lastError)
+                .apply();
     }
 
     /** Clears every stored setting; lyric caches on disk are managed by {@link LyricCache}. */

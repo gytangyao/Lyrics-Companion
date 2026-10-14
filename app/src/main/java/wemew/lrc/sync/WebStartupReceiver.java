@@ -18,7 +18,7 @@ public final class WebStartupReceiver extends BroadcastReceiver {
                 || Intent.ACTION_USER_UNLOCKED.equals(action)
                 || "android.intent.action.QUICKBOOT_POWERON".equals(action)
                 || "com.htc.intent.action.QUICKBOOT_POWERON".equals(action);
-        if (!restore || !AppPreferences.webEnabled(context)) return;
+        if (!restore) return;
         // Binding 0.0.0.0 needs no interface to be up yet, so start immediately.
         WebSyncService.start(context);
     }

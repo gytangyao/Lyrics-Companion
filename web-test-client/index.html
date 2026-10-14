@@ -208,6 +208,11 @@
         <div class="field checkRow">
             <label><input type="checkbox" id="showNext"> 显示下一句</label>
         </div>
+        <div class="field">
+            <label>服务地址（手机 IP:端口）</label>
+            <input type="text" id="hostInput" placeholder="例如 192.168.1.5:8765">
+            <button id="connectHost" style="margin-top:8px;width:100%;padding:9px;background:#6EE7F2;color:#07111F;border:none;border-radius:8px;font-size:14px;font-weight:bold;">连接</button>
+        </div>
         <button id="closeSettings">完成</button>
     </div>
     <div id="hint">设置保存在本机 · 键盘 ← → 可微调歌词时间</div>
@@ -285,6 +290,52 @@
     var reconnectTimer = null;
     var pollTimer = null;
     var pingTimer = null;
+    var HOST_KEY = 'wemew.display.host';
+    /** '' means same-origin (served by the app itself); otherwise "ip:port" of the phone. */
+    var remoteHost = '';
+
+    function hostParam() {
+        var match = window.location.search.match(/[?&]host=([^&]+)/);
+        return match ? decodeURIComponent(match[1]) : null;
+    }
+
+    function resolveHost() {
+        var fromUrl = hostParam();
+        if (fromUrl !== null && fromUrl.trim()) {
+            remoteHost = fromUrl.trim().replace(/^wss?:\/\/|^https?:\/\//, '').replace(/\/$/, '');
+        } else {
+            try { remoteHost = window.localStorage.getItem(HOST_KEY) || ''; } catch (error) { }
+        }
+        if (!remoteHost && !window.location.host) {
+            // Opened as a local file without a host: fall back to any remembered address.
+            try { remoteHost = window.localStorage.getItem(HOST_KEY) || ''; } catch (error) { }
+        }
+    }
+
+    function wsBaseUrl() {
+        if (!remoteHost) {
+            return (window.location.protocol === 'https:' ? 'wss://' : 'ws://')
+                    + window.location.host;
+        }
+        return 'ws://' + remoteHost;
+    }
+
+    function restBase() {
+        return remoteHost ? 'http://' + remoteHost : '';
+    }
+
+    function rememberHost() {
+        try { window.localStorage.setItem(HOST_KEY, remoteHost); } catch (error) { }
+    }
+
+    function reconnectAll() {
+        if (socket) { try { socket.onclose = null; socket.close(); } catch (error) { } socket = null; }
+        if (reconnectTimer) { window.clearTimeout(reconnectTimer); reconnectTimer = null; }
+        if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null; }
+        if (pingTimer) { window.clearInterval(pingTimer); pingTimer = null; }
+        anchor.ts = 0;
+        connect();
+    }
 
     function connect() {
         if (!window.WebSocket) {
@@ -292,9 +343,8 @@
             startPolling();
             return;
         }
-        var proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
         try {
-            socket = new WebSocket(proto + window.location.host + '/ws');
+            socket = new WebSocket(wsBaseUrl() + '/ws');
         } catch (error) {
             scheduleReconnect();
             return;
@@ -340,13 +390,13 @@
     function startPolling() {
         if (pollTimer) return;
         pollTimer = window.setInterval(function () {
-            getJson('/api/state', function (root) {
+            getJson(restBase() + '/api/state', function (root) {
                 if (!root) return;
                 if (root.track) onTrackData(root.track);
                 if (root.state) onStateData(root.state);
             });
         }, 1000);
-        getJson('/api/state', function (root) {
+        getJson(restBase() + '/api/state', function (root) {
             if (!root) return;
             if (root.track) onTrackData(root.track);
             if (root.state) onStateData(root.state);
@@ -411,7 +461,7 @@
         if (data.hasArt && data.artVersion !== artVersionSeen) {
             artVersionSeen = data.artVersion;
             var wrap = document.getElementById('coverWrap');
-            wrap.style.backgroundImage = 'url("/cover?v=' + artVersionSeen + '")';
+            wrap.style.backgroundImage = 'url("' + restBase() + '/cover?v=' + artVersionSeen + '")';
             wrap.style.display = 'block';
         } else if (!data.hasArt) {
             artVersionSeen = -1;
@@ -708,6 +758,21 @@
         document.getElementById('closeSettings').onclick = function () {
             document.getElementById('settingsPanel').className = '';
         };
+        var hostInput = document.getElementById('hostInput');
+        var connectHost = document.getElementById('connectHost');
+        hostInput.value = remoteHost;
+        hostInput.onkeydown = function (event) {
+            if (event.keyCode === 13) connectHost.onclick();
+        };
+        connectHost.onclick = function () {
+            var value = (hostInput.value || '').trim()
+                    .replace(/^wss?:\/\/|^https?:\/\//, '').replace(/\/$/, '');
+            remoteHost = value;
+            rememberHost();
+            document.getElementById('settingsPanel').className = '';
+            SafeToastLocal(value ? '正在连接 ' + value : '已切回同源地址');
+            reconnectAll();
+        };
 
         function apply() {
             saveSettings();
@@ -742,7 +807,18 @@
 
     /* ---------------- boot ---------------- */
 
+    function SafeToastLocal(message) {
+        var hint = document.getElementById('hint');
+        if (!hint) return;
+        hint.innerHTML = message;
+        window.setTimeout(function () {
+            hint.innerHTML = '设置保存在本机 · 键盘 ← → 可微调歌词时间';
+        }, 2500);
+    }
+
     loadSettings();
+    resolveHost();
+    rememberHost();
     updateMetaLayout();
     bindSettings();
     bindKeys();

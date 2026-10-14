@@ -1,18 +1,14 @@
 package wemew.lrc.sync;
 
-import android.content.Context;
-
 import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.InputStream;
 
 import fi.iki.elonen.NanoHTTPD;
 import fi.iki.elonen.NanoWSD;
 
 /**
- * The LAN-facing server: one port serves the reference page, the REST fallback and the
- * {@code /ws} WebSocket endpoint. Only files under {@code assets/web/} are ever served, and
- * only by exact name — there is no path translation, so directory traversal is impossible.
+ * The LAN-facing server: one port serves the built-in landing page, the REST fallback and the
+ * {@code /ws} WebSocket endpoint. The full display page lives in the repo's web-test-client
+ * directory; this server never reads the filesystem, so traversal is impossible.
  */
 final class WebDisplayServer extends NanoWSD {
 
@@ -25,17 +21,34 @@ final class WebDisplayServer extends NanoWSD {
         byte[] coverBytes(int requestedVersion);
     }
 
-    private static final String INDEX_ASSET = "web/index.html";
+    /**
+     * The reference display page lives in the repo's web-test-client directory, not in the APK;
+     * the built-in root page just points clients at the protocol and the test client.
+     */
+    private static final String LANDING_PAGE = "<!doctype html>\n"
+            + "<html><head><meta charset=\"utf-8\"><meta name=\"viewport\""
+            + " content=\"width=device-width,initial-scale=1\">\n"
+            + "<title>微喵歌词同步</title></head>\n"
+            + "<body style=\"margin:0;background:#0B1524;color:#F2F7FF;"
+            + "font-family:sans-serif;display:flex;align-items:center;"
+            + "justify-content:center;height:100vh\">\n"
+            + "<div style=\"max-width:560px;padding:32px;line-height:1.8\">\n"
+            + "<h1 style=\"color:#6EE7F2;margin:0 0 12px\">微喵歌词同步服务</h1>\n"
+            + "<p>本地址是手机上的同步服务端。歌词显示页面在仓库的"
+            + "<b>web-test-client</b> 目录（参考客户端，支持逐字高亮与字体调节）。</p>"
+            + "<p>协议端点：<code>/ws</code>（WebSocket 推送）、"
+            + "<code>/api/state</code> 与 <code>/api/track</code>（REST 快照）、"
+            + "<code>/cover?v=N</code>（封面 JPEG）。</p>"
+            + "<p style=\"color:#8FA3BF\">协议规范：docs/web-protocol.md</p>\n"
+            + "</div></body></html>\n";
 
-    private final Context context;
     private final WebSocketClients clients;
     private final WebSyncSocket.Hooks socketHooks;
     private final RestSource rest;
 
-    WebDisplayServer(int port, Context context, WebSocketClients clients,
+    WebDisplayServer(int port, WebSocketClients clients,
                      WebSyncSocket.Hooks socketHooks, RestSource rest) {
         super(port);
-        this.context = context.getApplicationContext();
         this.clients = clients;
         this.socketHooks = socketHooks;
         this.rest = rest;
@@ -60,7 +73,8 @@ final class WebDisplayServer extends NanoWSD {
     private Response route(NanoHTTPD.IHTTPSession session) {
         String path = pathOf(session);
         if ("/".equals(path) || "/index.html".equals(path)) {
-            return assetResponse(INDEX_ASSET, "text/html; charset=utf-8");
+            return NanoHTTPD.newFixedLengthResponse(Response.Status.OK,
+                    "text/html; charset=utf-8", LANDING_PAGE);
         }
         if ("/api/state".equals(path)) {
             return json(rest.stateSnapshot());
@@ -86,21 +100,6 @@ final class WebDisplayServer extends NanoWSD {
                 new ByteArrayInputStream(bytes), bytes.length);
         // The version in the URL is the cache key: once it is current it cannot change.
         response.addHeader("Cache-Control", "max-age=30");
-        return response;
-    }
-
-    private Response assetResponse(String assetPath, String mime) {
-        InputStream input;
-        long length;
-        try {
-            input = context.getAssets().open(assetPath);
-            length = input.available();
-        } catch (IOException error) {
-            return error(Response.Status.NOT_FOUND, "page not packaged");
-        }
-        Response response = NanoHTTPD.newFixedLengthResponse(Response.Status.OK, mime, input,
-                length);
-        response.addHeader("Cache-Control", "no-cache");
         return response;
     }
 
