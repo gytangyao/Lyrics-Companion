@@ -152,6 +152,7 @@ public final class WeSingLyricReader extends AccessibilityService {
                 for (int j = i + 1; j < Math.min(i + 4, ordered.size()); j++) {
                     String text = ordered.get(j).trim();
                     if (text.isEmpty() || WeSingChrome.isChrome(text)) continue;
+                    if (text.matches("\\d{1,2}:\\d{2}.*")) continue;
                     if (text.matches("[+\\d\\s.%/·]+")) continue;
                     if (text.equals(title) || text.contains(title)) continue;
                     if (text.length() <= 12) return text;
