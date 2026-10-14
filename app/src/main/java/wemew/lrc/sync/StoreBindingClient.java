@@ -80,22 +80,27 @@ final class StoreBindingClient {
     }
 
     /**
-     * Tolerant parse of the gateway response:
-     * {@code {"resultTrue":true,"resultMsg":{"enable":true,"barId":"...","barName":"..."}}}.
+     * Tolerant parse of the gateway response. Verified against the live API: a bound store
+     * returns {@code resultMsg:{mode, enable:false, barName:"TOUCH.", barId:"<uuid>"}} —
+     * binding is decided by a non-empty {@code barId} alone; {@code enable} is an unrelated
+     * flag and unbound answers still carry {@code resultTrue:true} with {@code barId:null}.
+     * {@code resultMsg} is polymorphic: an error response carries a plain string.
      */
     static BindingInfo parseBinding(String body) {
         if (body == null || body.trim().isEmpty()) return BindingInfo.UNBOUND;
         try {
             JSONObject root = new JSONObject(body);
-            boolean resultTrue = root.optBoolean("resultTrue",
-                    root.optBoolean("isResultTrue", false));
-            if (!resultTrue) return BindingInfo.UNBOUND;
             JSONObject message = root.optJSONObject("resultMsg");
+            if (message == null) {
+                String text = root.optString("resultMsg", "");
+                if (text.trim().startsWith("{")) message = new JSONObject(text);
+            }
             if (message == null) return BindingInfo.UNBOUND;
-            boolean enabled = message.optBoolean("enable", false);
             String barId = message.optString("barId", "");
             String barName = message.optString("barName", "");
-            if (!enabled || barId.trim().isEmpty()) return BindingInfo.UNBOUND;
+            if (barId == null || barId.trim().isEmpty() || "null".equals(barId.trim())) {
+                return BindingInfo.UNBOUND;
+            }
             return new BindingInfo(true, barId.trim(), barName.trim());
         } catch (Throwable error) {
             return BindingInfo.UNBOUND;

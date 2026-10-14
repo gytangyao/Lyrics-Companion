@@ -4,33 +4,50 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+/**
+ * Shapes verified against the live gateway (song.wemew.com): binding is a non-empty barId;
+ * enable:false does not unbind, and unbound answers still return resultTrue:true.
+ */
 public class StoreBindingClientTest {
 
     @org.junit.Test public void boundResponseCarriesStoreIdentity() {
         StoreBindingClient.BindingInfo info = StoreBindingClient.parseBinding(
-                "{\"resultTrue\":true,\"resultMsg\":"
-                        + "{\"enable\":true,\"barId\":\"B1024\",\"barName\":\"微喵旗舰店\"}}");
+                "{\"resultMsg\":{\"mode\":\"server\",\"enable\":false,"
+                        + "\"barName\":\"TOUCH.\","
+                        + "\"barId\":\"f819730e-867e-4b62-8424-f353d494784e\"},"
+                        + "\"code\":0,\"version\":1.0,\"resultTrue\":true}");
         assertTrue(info.bound);
-        assertEquals("B1024", info.barId);
-        assertEquals("微喵旗舰店", info.barName);
+        assertEquals("f819730e-867e-4b62-8424-f353d494784e", info.barId);
+        assertEquals("TOUCH.", info.barName);
     }
 
-    @org.junit.Test public void unboundWhenResultFalse() {
-        assertFalse(StoreBindingClient.parseBinding(
-                "{\"resultTrue\":false,\"resultMsg\":null}").bound);
-    }
-
-    @org.junit.Test public void unboundWhenDisabled() {
+    @org.junit.Test public void unboundStillReportsResultTrue() {
         StoreBindingClient.BindingInfo info = StoreBindingClient.parseBinding(
-                "{\"resultTrue\":true,\"resultMsg\":"
-                        + "{\"enable\":false,\"barId\":\"B1\",\"barName\":\"x\"}}");
+                "{\"resultMsg\":{\"mode\":null,\"enable\":false,\"barName\":null,"
+                        + "\"barId\":null},\"code\":0,\"version\":1.0,\"resultTrue\":true}");
         assertFalse(info.bound);
     }
 
-    @org.junit.Test public void unboundWhenBarIdEmpty() {
+    @org.junit.Test public void stringifiedResultMsgIsParsed() {
+        StoreBindingClient.BindingInfo info = StoreBindingClient.parseBinding(
+                "{\"resultTrue\":true,\"resultMsg\":\"{\\\"enable\\\":false,"
+                        + "\\\"barId\\\":\\\"B9\\\",\\\"barName\\\":\\\"门店九\\\"}\"}");
+        assertTrue(info.bound);
+        assertEquals("B9", info.barId);
+        assertEquals("门店九", info.barName);
+    }
+
+    @org.junit.Test public void errorStringResultMsgMeansUnbound() {
+        // resultMsg is polymorphic: failures carry the message as a plain string.
         assertFalse(StoreBindingClient.parseBinding(
-                "{\"resultTrue\":true,\"resultMsg\":"
-                        + "{\"enable\":true,\"barId\":\"\",\"barName\":\"x\"}}").bound);
+                "{\"resultMsg\":\"酒吧未开通歌曲识别功能\",\"code\":0,"
+                        + "\"version\":1.0,\"resultTrue\":false}").bound);
+    }
+
+    @org.junit.Test public void literalNullBarIdIsUnbound() {
+        assertFalse(StoreBindingClient.parseBinding(
+                "{\"resultTrue\":true,\"resultMsg\":{\"barId\":\"null\",\"barName\":\"x\"}}")
+                .bound);
     }
 
     @org.junit.Test public void garbageNeverThrows() {
@@ -38,14 +55,5 @@ public class StoreBindingClientTest {
         assertFalse(StoreBindingClient.parseBinding("").bound);
         assertFalse(StoreBindingClient.parseBinding("not json").bound);
         assertFalse(StoreBindingClient.parseBinding("{\"unexpected\":1}").bound);
-    }
-
-    @org.junit.Test public void isResultTrueAliasAccepted() {
-        // Some wemew endpoints use code+isResultTrue instead of resultTrue.
-        StoreBindingClient.BindingInfo info = StoreBindingClient.parseBinding(
-                "{\"code\":200,\"isResultTrue\":true,\"resultMsg\":"
-                        + "{\"enable\":true,\"barId\":\"B7\",\"barName\":\"门店七\"}}");
-        assertTrue(info.bound);
-        assertEquals("B7", info.barId);
     }
 }
