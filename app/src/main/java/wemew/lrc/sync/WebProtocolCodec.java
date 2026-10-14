@@ -180,6 +180,13 @@ final class WebProtocolCodec {
         return envelope(WebProtocol.TYPE_ERROR, ts, data);
     }
 
+    /** Tells every display to clear its lyric surface (wrong-track guard on the phone). */
+    static String blank(long ts, String reason) {
+        JSONObject data = new JSONObject();
+        put(data, "reason", reason == null ? "" : reason);
+        return envelope(WebProtocol.TYPE_BLANK, ts, data);
+    }
+
     static String envelope(String type, long ts, JSONObject data) {
         JSONObject envelope = new JSONObject();
         put(envelope, "v", WebProtocol.PROTOCOL_VERSION);

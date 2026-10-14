@@ -38,6 +38,8 @@ final class AppPreferences {
     static final String KEY_BOUND_BAR_NAME = "bound_bar_name";
     static final String KEY_BINDING_LAST_CHECK_MS = "binding_last_check_ms";
     static final String KEY_BINDING_LAST_ERROR = "binding_last_error";
+    /** Wrong-track guard: the song key whose display is blanked; cleared when it changes. */
+    static final String KEY_PAUSED_SONG_KEY = "paused_song_key";
 
     private AppPreferences() {}
 
@@ -275,6 +277,16 @@ final class AppPreferences {
                 .putLong(KEY_BINDING_LAST_CHECK_MS, checkedAtMs)
                 .putString(KEY_BINDING_LAST_ERROR, lastError == null ? "" : lastError)
                 .apply();
+    }
+
+    /** The paused song key (title/artist/source); empty when nothing is paused. */
+    static String pausedSongKey(Context context) {
+        return get(context).getString(KEY_PAUSED_SONG_KEY, "");
+    }
+
+    static void setPausedSongKey(Context context, String songKey) {
+        get(context).edit().putString(KEY_PAUSED_SONG_KEY,
+                songKey == null ? "" : songKey).apply();
     }
 
     /** Clears every stored setting; lyric caches on disk are managed by {@link LyricCache}. */

@@ -120,6 +120,13 @@ public class WebProtocolCodecTest {
         assertEquals(222L, new JSONObject(WebProtocolCodec.pong(111L, 222L)).getLong("ts"));
     }
 
+    @org.junit.Test public void blankFrameCarriesReason() throws Exception {
+        JSONObject root = new JSONObject(WebProtocolCodec.blank(55L, "output-paused"));
+        assertEquals("blank", root.getString("type"));
+        assertEquals(55L, root.getLong("ts"));
+        assertEquals("output-paused", root.getJSONObject("data").getString("reason"));
+    }
+
     @org.junit.Test public void parseInboundReadsHelloPingAndUnknownTypes() throws Exception {
         WebProtocolCodec.Inbound ping = WebProtocolCodec.parseInbound(
                 "{\"v\":1,\"type\":\"ping\",\"ts\":777}");

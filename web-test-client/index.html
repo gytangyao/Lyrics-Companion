@@ -8,7 +8,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body { width: 100%; height: 100%; overflow: hidden; }
     body {
-        background: #0B1524;
+        background: #0B0E1C;
         font-family: sans-serif;
         color: #F2F7FF;
         -webkit-user-select: none;
@@ -29,7 +29,7 @@
     }
     #coverShade {
         position: absolute; left: 0; top: 0; right: 0; bottom: 0;
-        background: #0B1524;
+        background: #0B0E1C;
         opacity: 0.78;
     }
     #meta {
@@ -39,7 +39,7 @@
         margin-bottom: 6px;
     }
     #title { font-size: 22px; font-weight: bold; color: #F2F7FF; white-space: nowrap; overflow: hidden; }
-    #artist { font-size: 15px; color: #8FA3BF; margin-top: 4px; white-space: nowrap; overflow: hidden; }
+    #artist { font-size: 15px; color: #ADABF2; margin-top: 4px; white-space: nowrap; overflow: hidden; }
     #lyricWrap {
         position: relative;
         width: 100%;
@@ -57,22 +57,22 @@
         word-break: break-word;
         font-weight: bold;
     }
-    #lineBase { color: #8FA3BF; }
+    #lineBase { color: #ADABF2; }
     #lineClip {
         position: absolute; left: 0; top: 0;
         width: 100%;
         overflow: hidden;
     }
-    #lineFill { color: #6EE7F2; }
+    #lineFill { color: #F40861; }
     /* 逐词单元：wub 是基色字，wuf 是高亮裁剪层（按该词的演唱进度揭示）。 */
     .wu { position: relative; display: inline-block; }
-    .wub { display: inline-block; white-space: pre; color: #8FA3BF; }
+    .wub { display: inline-block; white-space: pre; color: #ADABF2; }
     .wuf { position: absolute; left: 0; top: 0; height: 100%; overflow: hidden; width: 0; }
-    .wut { display: inline-block; white-space: pre; color: #6EE7F2; }
+    .wut { display: inline-block; white-space: pre; color: #F40861; }
     #translation {
         position: relative;
         margin-top: 10px;
-        color: #A9B6C8;
+        color: #ADABF2;
         font-size: 0.55em;
         min-height: 1em;
         white-space: pre-wrap;
@@ -81,7 +81,7 @@
     #nextLine {
         position: relative;
         margin-top: 12px;
-        color: #66788F;
+        color: #7A7FA5;
         font-size: 0.45em;
         min-height: 1em;
         white-space: nowrap;
@@ -91,7 +91,7 @@
         position: relative;
         display: none;
         font-size: 1em;
-        color: #6EE7F2;
+        color: #F40861;
         letter-spacing: 0.4em;
     }
     .pulse { -webkit-animation: pulse 2.2s ease-in-out infinite; animation: pulse 2.2s ease-in-out infinite; }
@@ -100,12 +100,12 @@
     #connDot {
         position: absolute; right: 14px; top: 14px;
         width: 12px; height: 12px; border-radius: 6px;
-        background: #66788F;
+        background: #7A7FA5;
     }
     #settingsBtn {
         position: absolute; left: 14px; top: 8px;
         width: 44px; height: 44px;
-        color: #8FA3BF;
+        color: #ADABF2;
         font-size: 26px;
         text-align: center;
         line-height: 44px;
@@ -114,8 +114,8 @@
     #settingsPanel {
         position: absolute; left: 0; top: 0; bottom: 0;
         width: 320px; max-width: 86%;
-        background: #101E31;
-        border-right: 1px solid #22344E;
+        background: #1C1D2C;
+        border-right: 1px solid #2A2C44;
         padding: 20px 18px;
         overflow-y: auto;
         display: none;
@@ -129,13 +129,13 @@
         display: block;
         -webkit-transform: translateX(0); transform: translateX(0);
     }
-    #settingsPanel h2 { font-size: 16px; color: #6EE7F2; margin: 4px 0 14px; }
+    #settingsPanel h2 { font-size: 16px; color: #F40861; margin: 4px 0 14px; }
     .field { margin-bottom: 16px; }
-    .field label { display: block; margin-bottom: 6px; color: #A9B6C8; }
+    .field label { display: block; margin-bottom: 6px; color: #ADABF2; }
     .field input[type=range] { width: 100%; }
     .field select, .field input[type=text] {
-        width: 100%; padding: 6px; background: #17263A; color: #F3F7FC;
-        border: 1px solid #2C4160; border-radius: 6px;
+        width: 100%; padding: 6px; background: #262843; color: #F3F7FC;
+        border: 1px solid #2A2C44; border-radius: 6px;
         font-size: 14px;
     }
     .colorRow { overflow: hidden; }
@@ -147,7 +147,7 @@
     .checkRow label { color: #D8E1EE; }
     #closeSettings {
         margin-top: 8px; width: 100%; padding: 10px;
-        background: #6EE7F2; color: #07111F; border: none; border-radius: 8px;
+        background: #F40861; color: #FFFFFF; border: none; border-radius: 8px;
         font-size: 15px; font-weight: bold;
     }
     #hint { position: absolute; bottom: 10px; width: 100%; text-align: center; color: #46586E; font-size: 12px; }
@@ -211,7 +211,7 @@
         <div class="field">
             <label>门店号（barId，见 App 首页「门店授权」）</label>
             <input type="text" id="hostInput" placeholder="例如 f819730e-867e-…">
-            <button id="connectHost" style="margin-top:8px;width:100%;padding:9px;background:#6EE7F2;color:#07111F;border:none;border-radius:8px;font-size:14px;font-weight:bold;">连接</button>
+            <button id="connectHost" style="margin-top:8px;width:100%;padding:9px;background:#F40861;color:#FFFFFF;border:none;border-radius:8px;font-size:14px;font-weight:bold;">连接</button>
         </div>
         <button id="closeSettings">完成</button>
     </div>
@@ -234,8 +234,8 @@
     };
     var settings = {
         fontSize: 56,
-        baseColor: '#8FA3BF',
-        highlightColor: '#6EE7F2',
+        baseColor: '#ADABF2',
+        highlightColor: '#F40861',
         fontFamily: 'default',
         showTranslation: true,
         showNext: true
@@ -348,7 +348,7 @@
 
     function connect() {
         if (!window.WebSocket || !barId) {
-            setDot('#66788F');
+            setDot('#7A7FA5');
             scheduleReconnect();
             return;
         }
@@ -359,7 +359,7 @@
             return;
         }
         socket.onopen = function () {
-            setDot('#6EE7F2');
+            setDot('#F40861');
             // Announce as the display side; the app answers with a track+state snapshot.
             sendCloudOnline();
             if (cloudTimer) window.clearInterval(cloudTimer);
@@ -372,7 +372,7 @@
             handleFrame(event.data);
         };
         socket.onclose = function () {
-            setDot('#66788F');
+            setDot('#7A7FA5');
             scheduleReconnect();
         };
         socket.onerror = function () {
@@ -409,7 +409,27 @@
         else if (frame.type === 'state') onStateData(frame.data, frame.ts);
         else if (frame.type === 'line') onLineData(frame.data);
         else if (frame.type === 'pong') onPong(frame);
+        else if (frame.type === 'blank') onBlankData();
         // 'online' room heartbeats and any unknown types are ignored (cloud echo included).
+    }
+
+    /* 识别有误时 App 下发的清屏指令：清空一切，不显示任何歌词与占位。 */
+    function onBlankData() {
+        lines = [];
+        liveMode = false;
+        liveText = '';
+        anchor.ts = 0;
+        document.getElementById('title').innerHTML = '';
+        document.getElementById('artist').innerHTML = '';
+        document.getElementById('lineBase').innerHTML = '';
+        document.getElementById('lineFill').innerHTML = '';
+        document.getElementById('translation').innerHTML = '';
+        document.getElementById('nextLine').innerHTML = '';
+        document.getElementById('interlude').style.display = 'none';
+        document.getElementById('lineBox').style.display = 'none';
+        document.getElementById('coverWrap').style.display = 'none';
+        lineIndexShown = -2;
+        textShown = null;
     }
 
     function onTrackData(data, ts) {

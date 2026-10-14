@@ -34,6 +34,8 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
     private volatile String lastPushSummary = "";
     /** Cloud-room leg; every pushed frame fans out through it. */
     private volatile CloudSyncClient cloud;
+    /** True while the wrong-track guard has already blanked the displays. */
+    private boolean blankPushed;
 
     WebStatePublisher(Context context) {
         this.context = context.getApplicationContext();
@@ -82,6 +84,12 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
         if (handler != null) handler.postDelayed(this::tick, TICK_MS);
     }
 
+    /** Song identity without the timeline epoch: the unit the wrong-track guard pauses. */
+    static String songKey(String title, String artist, String sourceId) {
+        return (title == null ? "" : title) + "\n" + (artist == null ? "" : artist)
+                + "\n" + (sourceId == null ? "" : sourceId);
+    }
+
     private void publish() {
         long nowWall = System.currentTimeMillis();
         long nowElapsed = SystemClock.elapsedRealtime();
@@ -89,6 +97,30 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
                 MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(context));
         LrcTimeline timeline = MusicStateStore.currentTimeline();
         float speed = MusicStateStore.playbackSpeed();
+
+        // Wrong-track guard: only the paused song is blanked; a track change auto-resumes.
+        String pausedSong = AppPreferences.pausedSongKey(context);
+        if (!pausedSong.isEmpty()) {
+            String currentSong = songKey(snapshot.title, snapshot.artist,
+                    MusicStateStore.activeSourceId());
+            if (pausedSong.equals(currentSong)) {
+                if (!blankPushed) {
+                    blankPushed = true;
+                    fanOut(WebProtocolCodec.blank(nowWall, "output-paused"));
+                    lastPushSummary = "blank（本曲已停止显示）";
+                }
+                return;
+            }
+            // The song changed: lift the guard and force a full track frame right away.
+            AppPreferences.setPausedSongKey(context, "");
+            blankPushed = false;
+            diff.trackKey = null;
+            diff.lastStatePushElapsedMs = null;
+            DiagnosticLog.record(context, "WebSync", "曲目切换，自动恢复歌词输出");
+        } else if (blankPushed) {
+            blankPushed = false;
+        }
+
         if (timeline != previousTimeline) {
             timelineEpoch++;
             previousTimeline = timeline;
@@ -151,10 +183,16 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
     }
 
     @Override public String trackJson() {
-        // Always freshly built: the snapshot must reflect "now", never a cached frame (a
-        // stale position anchor makes a joining display jump).
         MusicSnapshot snapshot =
                 MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(context));
+        // A display joining while the current song is paused gets the blank, not a track.
+        String pausedSong = AppPreferences.pausedSongKey(context);
+        if (!pausedSong.isEmpty() && pausedSong.equals(songKey(snapshot.title, snapshot.artist,
+                MusicStateStore.activeSourceId()))) {
+            return WebProtocolCodec.blank(System.currentTimeMillis(), "output-paused");
+        }
+        // Always freshly built: the snapshot must reflect "now", never a cached frame (a
+        // stale position anchor makes a joining display jump).
         WebProtocolCodec.TrackPayload payload = payload(snapshot,
                 MusicStateStore.currentTimeline(), MusicStateStore.playbackSpeed(),
                 snapshot.liveLyricActive);

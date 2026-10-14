@@ -25,7 +25,6 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 import com.google.android.material.button.MaterialButton;
-import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.shape.MaterialShapeDrawable;
 import com.google.android.material.textfield.TextInputEditText;
@@ -51,6 +50,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextView musicTitle;
     private TextView musicSource;
     private TextView lyricDetail;
+    private MaterialButton outputToggle;
     private LinearLayout permissionRows;
     private boolean permissionDialogVisible;
     private int pendingPermissionCheck;
@@ -87,8 +87,8 @@ public final class MainActivity extends AppCompatActivity {
         getDelegate().setLocalNightMode(AppCompatDelegate.MODE_NIGHT_YES);
         super.onCreate(savedInstanceState);
         if (Build.VERSION.SDK_INT >= 21) {
-            getWindow().setStatusBarColor(0xFF07111F);
-            getWindow().setNavigationBarColor(0xFF07111F);
+            getWindow().setStatusBarColor(0xFF0B0E1C);
+            getWindow().setNavigationBarColor(0xFF0B0E1C);
         }
         setContentView(buildContent());
         MusicStateStore.initialize(this);
@@ -122,11 +122,6 @@ public final class MainActivity extends AppCompatActivity {
         View shell = getLayoutInflater().inflate(R.layout.activity_main, null, false);
         LinearLayout root = shell.findViewById(R.id.main_content);
         LinearLayout pageHost = shell.findViewById(R.id.main_page_host);
-        MaterialToolbar toolbar = shell.findViewById(R.id.main_toolbar);
-        toolbar.setTitle("微喵歌词同步");
-        toolbar.setSubtitle("门店歌词同步终端");
-        toolbar.setTitleTextColor(Color.WHITE);
-        toolbar.setSubtitleTextColor(0xFFA9B6C8);
 
         // ---- 门店授权 ----
         LinearLayout bindingCard = card();
@@ -134,13 +129,13 @@ public final class MainActivity extends AppCompatActivity {
         bindingHeadline = text("", 16, 0xFFF3F7FC, true);
         bindingHeadline.setPadding(0, dp(8), 0, dp(4));
         bindingCard.addView(bindingHeadline);
-        bindingStore = text("", 14, 0xFF6EE7F2, false);
+        bindingStore = text("", 14, 0xFFF40861, false);
         bindingStore.setPadding(0, 0, 0, dp(6));
         bindingCard.addView(bindingStore);
         LinearLayout deviceRow = new LinearLayout(this);
         deviceRow.setOrientation(LinearLayout.HORIZONTAL);
         deviceRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView deviceLabel = text("设备码", 13, 0xFFA9B6C8, false);
+        TextView deviceLabel = text("设备码", 13, 0xFFADABF2, false);
         deviceRow.addView(deviceLabel, new LinearLayout.LayoutParams(-2, -2));
         bindingDevice = text("", 15, 0xFFF3F7FC, true);
         if (Build.VERSION.SDK_INT >= 21) bindingDevice.setLetterSpacing(0.12f);
@@ -154,26 +149,26 @@ public final class MainActivity extends AppCompatActivity {
                 new LinearLayout.LayoutParams(-2, dp(42)));
         bindingCard.addView(deviceRow);
         TextView bindingHint = text("请把设备码登记到微喵门店后台完成授权；绑定后自动同步门店信息。",
-                12, 0xFF74869D, false);
+                12, 0xFF7A7FA5, false);
         bindingHint.setLineSpacing(0f, 1.2f);
         bindingHint.setPadding(0, dp(6), 0, dp(2));
         bindingCard.addView(bindingHint);
-        bindingMeta = text("", 12, 0xFF66788F, false);
+        bindingMeta = text("", 12, 0xFF7A7FA5, false);
         bindingMeta.setPadding(0, dp(2), 0, 0);
         bindingCard.addView(bindingMeta);
 
         // ---- 同步状态 ----
         LinearLayout syncCard = card();
         syncCard.addView(sectionLabel("同步状态"));
-        cloudStatus = text("", 14, 0xFF6EE7F2, true);
+        cloudStatus = text("", 14, 0xFFF40861, true);
         cloudStatus.setPadding(0, dp(8), 0, dp(2));
         syncCard.addView(cloudStatus);
         TextView cloudHint = text("同步经微喵云门店房间转发，显示端只需门店号即可连接，"
                 + "显示页在仓库 web-test-client（?barId=门店号）。",
-                12, 0xFF74869D, false);
+                12, 0xFF7A7FA5, false);
         cloudHint.setLineSpacing(0f, 1.2f);
         syncCard.addView(cloudHint);
-        cloudPush = text("", 12, 0xFF66788F, false);
+        cloudPush = text("", 12, 0xFF7A7FA5, false);
         cloudPush.setPadding(0, dp(4), 0, 0);
         syncCard.addView(cloudPush);
 
@@ -183,15 +178,35 @@ public final class MainActivity extends AppCompatActivity {
         musicTitle = text("等待播放器…", 16, 0xFFF3F7FC, true);
         musicTitle.setPadding(0, dp(8), 0, dp(2));
         lyricCard.addView(musicTitle);
-        musicSource = text("", 13, 0xFFA9B6C8, false);
+        musicSource = text("", 13, 0xFFADABF2, false);
         musicSource.setPadding(0, 0, 0, dp(2));
         lyricCard.addView(musicSource);
-        lyricDetail = text("", 13, 0xFF9EAFBF, false);
+        lyricDetail = text("", 13, 0xFF8B90B8, false);
         lyricDetail.setPadding(0, 0, 0, dp(6));
         lyricCard.addView(lyricDetail);
+        outputToggle = button("停止大屏歌词（仅本曲）", true);
+        outputToggle.setOnClickListener(v -> {
+            String pausedSong = AppPreferences.pausedSongKey(this);
+            if (pausedSong.isEmpty()) {
+                MusicSnapshot snapshot =
+                        MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(this));
+                AppPreferences.setPausedSongKey(this, WebStatePublisher.songKey(
+                        snapshot.title, snapshot.artist,
+                        MusicStateStore.activeSourceId()));
+                SafeToast.show(this, "本曲大屏歌词已停止，切歌后自动恢复", Toast.LENGTH_SHORT);
+            } else {
+                AppPreferences.setPausedSongKey(this, "");
+                SafeToast.show(this, "歌词输出已恢复", Toast.LENGTH_SHORT);
+            }
+            refreshLyric();
+        });
+        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(-1, dp(46));
+        lyricCard.addView(outputToggle, toggleParams);
         MaterialButton rematch = button("修正歌曲信息并重新匹配", false);
         rematch.setOnClickListener(v -> showLyricRematchDialog());
-        lyricCard.addView(rematch, new LinearLayout.LayoutParams(-1, dp(46)));
+        LinearLayout.LayoutParams rematchParams = new LinearLayout.LayoutParams(-1, dp(46));
+        rematchParams.topMargin = dp(8);
+        lyricCard.addView(rematch, rematchParams);
 
         // ---- 权限 ----
         LinearLayout permissionCard = card();
@@ -219,7 +234,7 @@ public final class MainActivity extends AppCompatActivity {
         String barName = AppPreferences.boundBarName(this);
         boolean bound = !barId.isEmpty();
         bindingHeadline.setText(bound ? "已绑定门店" : "未绑定");
-        bindingHeadline.setTextColor(bound ? 0xFF6EE7F2 : 0xFFFFCA66);
+        bindingHeadline.setTextColor(bound ? 0xFFF40861 : 0xFFF4E230);
         bindingStore.setText(bound ? barName + "（" + barId + "）" : "");
         bindingDevice.setText(StoreBindingClient.deviceId(this));
         long lastCheck = AppPreferences.bindingLastCheckMs(this);
@@ -235,7 +250,7 @@ public final class MainActivity extends AppCompatActivity {
             meta.append("错误：").append(error);
         }
         bindingMeta.setText(meta.toString());
-        bindingMeta.setTextColor(checkFailed ? 0xFFFFCA66 : 0xFF66788F);
+        bindingMeta.setTextColor(checkFailed ? 0xFFF4E230 : 0xFF7A7FA5);
     }
 
     private void refreshSync() {
@@ -243,14 +258,14 @@ public final class MainActivity extends AppCompatActivity {
         String barId = AppPreferences.boundBarId(this);
         if (barId.isEmpty()) {
             cloudStatus.setText("云端：未绑定，等待门店登记设备码");
-            cloudStatus.setTextColor(0xFFFFCA66);
+            cloudStatus.setTextColor(0xFFF4E230);
         } else if (cloudUp) {
             cloudStatus.setText("云端：已连接门店房间 · 显示端 " + WebSyncService.cloudDisplayCount()
                     + " 个");
-            cloudStatus.setTextColor(0xFF6EE7F2);
+            cloudStatus.setTextColor(0xFFF40861);
         } else {
             cloudStatus.setText("云端：连接中…（已绑定 " + barId + "）");
-            cloudStatus.setTextColor(0xFFFFCA66);
+            cloudStatus.setTextColor(0xFFF4E230);
         }
         String push = WebSyncService.pushSummary();
         cloudPush.setText(push == null || push.isEmpty() ? "" : "最近推送：" + push);
@@ -292,6 +307,19 @@ public final class MainActivity extends AppCompatActivity {
                 : "    逐字时间轴 " + wordTimed + "/" + total + " 行"
                         + (wordTimed > 0 ? "" : "（行级，整行渐变）");
         lyricDetail.setText("匹配：" + matchState + timing);
+        boolean paused = !AppPreferences.pausedSongKey(this).isEmpty();
+        if (paused) {
+            lyricDetail.setText("本曲大屏显示已停止：识别有误时使用，切歌自动恢复，也可手动恢复");
+            lyricDetail.setTextColor(0xFFF4E230);
+        } else {
+            lyricDetail.setTextColor(0xFF8B90B8);
+        }
+        outputToggle.setText(paused ? "恢复本曲歌词推送" : "停止大屏歌词（仅本曲）");
+        outputToggle.setBackgroundTintList(ColorStateList.valueOf(paused
+                ? 0xFFF4E230
+                : themeColor(com.google.android.material.R.attr.colorPrimary, 0xFFF40861)));
+        outputToggle.setTextColor(paused ? 0xFF0B0E1C
+                : themeColor(com.google.android.material.R.attr.colorOnPrimary, 0xFFFFFFFF));
     }
 
     private void refreshPermissions() {
@@ -310,7 +338,7 @@ public final class MainActivity extends AppCompatActivity {
                 "权限正常", false, v -> refreshStatus());
         TextView status = text("通知读取 " + (hasNotificationAccess() ? "已授权" : "未授权")
                 + "     监听器 " + listenerState(hasNotificationAccess()),
-                12, 0xFF8392A8, false);
+                12, 0xFF8B90B8, false);
         status.setPadding(0, dp(6), 0, 0);
         permissionRows.addView(status);
     }
@@ -351,7 +379,7 @@ public final class MainActivity extends AppCompatActivity {
         artistParams.topMargin = dp(8);
         content.addView(artistLayout, artistParams);
         TextView catalogLabel = text("匹配词库（汽水 / 网易YRC / QQ / 酷狗多为逐字时间轴）", 13,
-                0xFFA9B6C8, false);
+                0xFFADABF2, false);
         LinearLayout.LayoutParams catalogLabelParams = new LinearLayout.LayoutParams(-1, -2);
         catalogLabelParams.topMargin = dp(12);
         content.addView(catalogLabel, catalogLabelParams);
@@ -394,10 +422,10 @@ public final class MainActivity extends AppCompatActivity {
 
     private void highlightCatalogButton(MaterialButton button, boolean selected) {
         button.setBackgroundTintList(ColorStateList.valueOf(selected
-                ? themeColor(com.google.android.material.R.attr.colorPrimary, 0xFF6EE7F2)
-                : 0xFF25364D));
+                ? themeColor(com.google.android.material.R.attr.colorPrimary, 0xFFF40861)
+                : 0xFF2A2C44));
         button.setTextColor(selected
-                ? themeColor(com.google.android.material.R.attr.colorOnPrimary, 0xFF07111F)
+                ? themeColor(com.google.android.material.R.attr.colorOnPrimary, 0xFF0B0E1C)
                 : themeColor(com.google.android.material.R.attr.colorOnSurface, 0xFFF1F5FA));
     }
 
@@ -407,7 +435,7 @@ public final class MainActivity extends AppCompatActivity {
         card.setPadding(dp(16), dp(15), dp(16), dp(16));
         MaterialShapeDrawable surface = new MaterialShapeDrawable();
         surface.setFillColor(ColorStateList.valueOf(
-                themeColor(com.google.android.material.R.attr.colorSurfaceContainer, 0xFF101E31)));
+                themeColor(com.google.android.material.R.attr.colorSurfaceContainer, 0xFF1C1D2C)));
         surface.setCornerSize(dp(20));
         surface.setElevation(dp(1));
         card.setBackground(surface);
@@ -422,7 +450,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private TextView sectionLabel(String value) {
         return text(value, 13, themeColor(com.google.android.material.R.attr.colorPrimary,
-                0xFF6EE7F2), true);
+                0xFFF40861), true);
     }
 
     private TextView text(String value, int sp, int color, boolean bold) {
@@ -439,13 +467,13 @@ public final class MainActivity extends AppCompatActivity {
         button.setText(value);
         button.setTextSize(13f);
         button.setTextColor(primary
-                ? themeColor(com.google.android.material.R.attr.colorOnPrimary, 0xFF07111F)
+                ? themeColor(com.google.android.material.R.attr.colorOnPrimary, 0xFF0B0E1C)
                 : themeColor(com.google.android.material.R.attr.colorOnSurface, 0xFFF1F5FA));
         button.setAllCaps(false);
         button.setCornerRadius(dp(15));
         button.setBackgroundTintList(ColorStateList.valueOf(
-                primary ? themeColor(com.google.android.material.R.attr.colorPrimary, 0xFF6EE7F2)
-                        : 0xFF25364D));
+                primary ? themeColor(com.google.android.material.R.attr.colorPrimary, 0xFFF40861)
+                        : 0xFF2A2C44));
         return button;
     }
 
@@ -609,7 +637,7 @@ public final class MainActivity extends AppCompatActivity {
         int night = getResources().getConfiguration().uiMode
                 & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
         if (night == android.content.res.Configuration.UI_MODE_NIGHT_YES) return requested;
-        if (requested == 0xFF6EE7F2) {
+        if (requested == 0xFFF40861) {
             return themeColor(com.google.android.material.R.attr.colorPrimary, requested);
         }
         float luminance = (Color.red(requested) * 0.2126f + Color.green(requested) * 0.7152f

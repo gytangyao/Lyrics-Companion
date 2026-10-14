@@ -17,6 +17,8 @@ final class WebProtocol {
     static final String TYPE_LINE = "line";
     static final String TYPE_PONG = "pong";
     static final String TYPE_ERROR = "error";
+    /** Displays clear everything and show no lyrics until the next track frame. */
+    static final String TYPE_BLANK = "blank";
 
     /** Client → server message types. */
     static final String TYPE_HELLO = "hello";

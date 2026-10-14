@@ -1,7 +1,7 @@
 <resources>
     <color name="app_background">#F7F9FC</color>
-    <color name="app_primary">#006D88</color>
-    <color name="md_theme_primary">#006D88</color>
+    <color name="app_primary">#F40861</color>
+    <color name="md_theme_primary">#F40861</color>
     <color name="md_theme_onPrimary">#FFFFFF</color>
     <color name="md_theme_surface">#F7F9FC</color>
     <color name="md_theme_surfaceContainer">#EAF0F6</color>
