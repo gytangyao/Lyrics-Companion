@@ -2,8 +2,6 @@ package wemew.lrc.sync;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -42,6 +40,11 @@ public final class OnboardingActivity extends AppCompatActivity {
     private MaterialButton finishButton;
     private LinearLayout screen1;
     private LinearLayout screen2;
+    private TextView screen2Title;
+    /** WeSing-only escape hatch; media mode must finish every required step. */
+    private TextView skipLink;
+    /** MIUI autostart has no query API; the user confirms it manually on that ROM. */
+    private boolean autostartConfirmed;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         getDelegate().setLocalNightMode(AppCompatDelegate.MODE_NIGHT_YES);
@@ -126,6 +129,8 @@ public final class OnboardingActivity extends AppCompatActivity {
         card.setBackground(surface);
         card.setOnClickListener(v -> {
             mode = value;
+            // Persist immediately: a rotation or process death must not lose the choice.
+            AppPreferences.putMusicSourceMode(this, mode);
             for (int i = 0; i < sourceCards.getChildCount(); i++) {
                 highlightSourceCard((LinearLayout) sourceCards.getChildAt(i), i == indexForMode(value));
             }
@@ -197,9 +202,16 @@ public final class OnboardingActivity extends AppCompatActivity {
 
     private LinearLayout buildPermissionScreen() {
         LinearLayout page = page();
-        TextView title = text(modeTitle(), 22, 0xFFF3F7FC, true);
-        title.setPadding(dp(4), dp(14), dp(4), dp(4));
-        page.addView(title, wrap());
+        TextView back = text("←  上一步", 14, 0xFFF40861, true);
+        back.setPadding(dp(4), dp(6), dp(4), dp(6));
+        back.setOnClickListener(v -> {
+            screen2.setVisibility(View.GONE);
+            screen1.setVisibility(View.VISIBLE);
+        });
+        page.addView(back, wrap());
+        screen2Title = text(modeTitle(), 22, 0xFFF3F7FC, true);
+        screen2Title.setPadding(dp(4), dp(2), dp(4), dp(4));
+        page.addView(screen2Title, wrap());
         TextView subtitle = text("完成必选项即可使用", 13, 0xFFADABF2, false);
         subtitle.setPadding(dp(4), dp(2), dp(4), dp(4));
         page.addView(subtitle, wrap());
@@ -217,11 +229,13 @@ public final class OnboardingActivity extends AppCompatActivity {
         finishButton = button("完成，进入主界面", true);
         finishButton.setOnClickListener(v -> finishOnboarding());
         bottom.addView(finishButton, new LinearLayout.LayoutParams(-1, dp(48)));
-        TextView skip = text("稍后再说（主界面权限卡可随时补齐）", 13, 0xFF8B90B8, false);
-        skip.setGravity(Gravity.CENTER);
-        skip.setPadding(0, dp(10), 0, dp(4));
-        skip.setOnClickListener(v -> finishOnboarding());
-        bottom.addView(skip, new LinearLayout.LayoutParams(-1, -2));
+        // Media mode is strictly gated; WeSing's guide is reserved for a later spec,
+        // so its escape hatch stays for now (visibility tracks the chosen mode).
+        skipLink = text("稍后再说（主界面权限卡可随时补齐）", 13, 0xFF8B90B8, false);
+        skipLink.setGravity(Gravity.CENTER);
+        skipLink.setPadding(0, dp(10), 0, dp(4));
+        skipLink.setOnClickListener(v -> finishOnboarding());
+        bottom.addView(skipLink, new LinearLayout.LayoutParams(-1, -2));
         page.addView(bottom, new LinearLayout.LayoutParams(-1, -2));
         return page;
     }
@@ -234,6 +248,10 @@ public final class OnboardingActivity extends AppCompatActivity {
     private void refreshChecklist() {
         if (permissionList == null) return;
         permissionList.removeAllViews();
+        if (screen2Title != null) screen2Title.setText(modeTitle());
+        if (skipLink != null) {
+            skipLink.setVisibility("wesing".equals(mode) ? View.VISIBLE : View.GONE);
+        }
 
         if ("media".equals(mode)) {
             addCheckRow("音乐读取权限（通知使用权）", hasNotificationAccess(),
@@ -249,29 +267,23 @@ public final class OnboardingActivity extends AppCompatActivity {
         addCheckRow("后台不受限（电池白名单）", isIgnoringBatteryOptimizations(),
                 "必选 · 防止后台冻结断开同步", v -> requestBatteryWhitelist());
 
-        boolean bound = !AppPreferences.boundBarId(this).isEmpty();
-        TextView binding = text(bound
-                ? "门店授权：已绑定 " + AppPreferences.boundBarName(this)
-                : "门店授权：设备码 " + StoreBindingClient.deviceId(this)
-                        + "（复制后到微喵门店后台登记，稍后生效）", 12,
-                bound ? 0xFF7ADB9B : 0xFF8B90B8, false);
-        binding.setLineSpacing(0f, 1.25f);
-        binding.setPadding(dp(4), dp(6), dp(4), dp(2));
-        binding.setOnClickListener(v -> {
-            ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            if (clipboard != null) {
-                clipboard.setPrimaryClip(ClipData.newPlainText("设备码",
-                        StoreBindingClient.deviceId(this)));
+        if ("media".equals(mode)) {
+            if (Build.VERSION.SDK_INT >= 33) {
+                addCheckRow("通知显示权限", postNotificationsGranted(),
+                        "必选 · 前台服务常驻可见",
+                        v -> requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101));
             }
-            SafeToast.show(this, "设备码已复制", Toast.LENGTH_SHORT);
-        });
-        permissionList.addView(binding, wrap());
-
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
-            addCheckRow("通知显示权限", false, "可选 · 前台服务通知",
-                    v -> requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101));
+            if (needsVendorAutostart()) {
+                addConfirmRow("开机自启动（厂商后台管理）", autostartConfirmed,
+                        "必选 · 系统无查询接口，允许自启动/后台运行后请手动确认",
+                        v -> openVendorAutostart(),
+                        v -> {
+                            autostartConfirmed = true;
+                            refreshChecklist();
+                        });
+            }
         }
+
         if ("wesing".equals(mode) && !WeSingLyricReader.enabled(this)) {
             addCheckRow("无障碍兜底（可选）", WeSingLyricReader.enabled(this),
                     "电脑离线时手机端行级歌词兜底", v -> openAccessibilitySettings());
@@ -284,11 +296,83 @@ public final class OnboardingActivity extends AppCompatActivity {
 
     private boolean requiredDone() {
         if (!isIgnoringBatteryOptimizations()) return false;
-        return !"media".equals(mode) || hasNotificationAccess();
+        if (!"media".equals(mode)) return true;
+        if (!hasNotificationAccess()) return false;
+        if (Build.VERSION.SDK_INT >= 33 && !postNotificationsGranted()) return false;
+        return !needsVendorAutostart() || autostartConfirmed;
+    }
+
+    private boolean postNotificationsGranted() {
+        return Build.VERSION.SDK_INT < 33
+                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
+     * Most Chinese OEMs layer a proprietary autostart / background manager on top of the
+     * platform. There is no query API on any of them, so on these brands the guide shows
+     * a manual-confirm step that deep-links into each vendor's manager.
+     */
+    private boolean needsVendorAutostart() {
+        String brand = Build.BRAND == null ? "" : Build.BRAND.toLowerCase(java.util.Locale.ROOT);
+        String fingerprint = Build.FINGERPRINT == null ? ""
+                : Build.FINGERPRINT.toLowerCase(java.util.Locale.ROOT);
+        return brand.contains("xiaomi") || brand.contains("redmi")
+                || brand.contains("huawei") || brand.contains("honor")
+                || brand.contains("oppo") || brand.contains("realme") || brand.contains("oneplus")
+                || brand.contains("vivo") || brand.contains("iqoo") || brand.contains("meizu")
+                || fingerprint.contains("miui") || fingerprint.contains("coloros")
+                || fingerprint.contains("funtouch") || fingerprint.contains("emui");
+    }
+
+    private void openVendorAutostart() {
+        Intent[] candidates = {
+                new Intent().setComponent(new ComponentName("com.miui.securitycenter",
+                        "com.miui.permcenter.autostart.AutoStartManagementActivity")),
+                new Intent().setComponent(new ComponentName("com.huawei.systemmanager",
+                        "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity")),
+                new Intent().setComponent(new ComponentName("com.coloros.safecenter",
+                        "com.coloros.safecenter.permission.startup.StartupAppListActivity")),
+                new Intent().setComponent(new ComponentName("com.coloros.safecenter",
+                        "com.coloros.safecenter.startupapp.StartupAppListActivity")),
+                new Intent().setComponent(new ComponentName("com.oppo.safe",
+                        "com.oppo.safe.permission.startup.StartupAppListActivity")),
+                new Intent().setComponent(new ComponentName("com.vivo.permissionmanager",
+                        "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")),
+                new Intent().setComponent(new ComponentName("com.iqoo.secure",
+                        "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager")),
+                new Intent().setComponent(new ComponentName("com.meizu.safe",
+                        "com.meizu.safe.permission.SmartBGActivity")),
+        };
+        for (Intent intent : candidates) {
+            if (startSettingsActivity(intent)) return;
+        }
+        openApplicationDetails();
+    }
+
+    private void openApplicationDetails() {
+        Intent details = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + getPackageName()));
+        if (!startSettingsActivity(details)) {
+            startSettingsActivity(new Intent(Settings.ACTION_SETTINGS));
+        }
+    }
+
+    /** A checklist row whose done-state is a manual user confirmation (no API exists). */
+    private void addConfirmRow(String label, boolean done, String hint,
+                               View.OnClickListener settingsAction, View.OnClickListener confirmAction) {
+        addCheckRow(label, done, hint, settingsAction,
+                done ? null : "我已开启", confirmAction);
     }
 
     private void addCheckRow(String label, boolean done, String hint,
                              View.OnClickListener action) {
+        addCheckRow(label, done, hint, action, null, null);
+    }
+
+    private void addCheckRow(String label, boolean done, String hint,
+                             View.OnClickListener action, String secondLabel,
+                             View.OnClickListener secondAction) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -304,10 +388,20 @@ public final class OnboardingActivity extends AppCompatActivity {
         detail.setPadding(0, dp(2), 0, 0);
         texts.addView(detail, wrap());
         row.addView(texts, new LinearLayout.LayoutParams(0, -2, 1f));
+        LinearLayout actions = new LinearLayout(this);
         MaterialButton go = button(done ? "已就绪" : "去设置", !done);
         go.setEnabled(!done);
         go.setOnClickListener(action);
-        row.addView(go, new LinearLayout.LayoutParams(-2, dp(44)));
+        actions.addView(go, new LinearLayout.LayoutParams(-2, dp(44)));
+        if (secondLabel != null && secondAction != null) {
+            MaterialButton second = button(secondLabel, false);
+            second.setOnClickListener(secondAction);
+            LinearLayout.LayoutParams secondParams =
+                    new LinearLayout.LayoutParams(-2, dp(44));
+            secondParams.leftMargin = dp(8);
+            actions.addView(second, secondParams);
+        }
+        row.addView(actions, new LinearLayout.LayoutParams(-2, -2));
 
         LinearLayout card = new LinearLayout(this);
         card.setPadding(dp(14), dp(12), dp(14), dp(12));
