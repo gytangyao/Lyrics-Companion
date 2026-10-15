@@ -402,11 +402,6 @@ public final class OnboardingActivity extends AppCompatActivity {
             }
         }
 
-        if ("wesing".equals(mode) && !WeSingLyricReader.enabled(this)) {
-            addCheckRow("无障碍兜底（可选）", WeSingLyricReader.enabled(this),
-                    "电脑离线时手机端行级歌词兜底", v -> openAccessibilitySettings());
-        }
-
         finishButton.setText(requiredDone() ? "下一步" : "完成必选项后继续");
         finishButton.setEnabled(requiredDone());
         finishButton.setAlpha(requiredDone() ? 1f : 0.45f);
@@ -581,13 +576,6 @@ public final class OnboardingActivity extends AppCompatActivity {
                 })
                 .setNegativeButton("取消", null)
                 .show();
-    }
-
-    private void openAccessibilitySettings() {
-        if (!startSettingsActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))) {
-            SafeToast.show(this, "无法打开无障碍设置，请手动开启「全民K歌歌词读取」",
-                    Toast.LENGTH_LONG);
-        }
     }
 
     private boolean startSettingsActivity(Intent intent) {

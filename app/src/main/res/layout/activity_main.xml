@@ -3,6 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#0B0E1C"
+    android:fitsSystemWindows="true"
     android:orientation="vertical">
 
     <ScrollView
@@ -20,15 +21,6 @@
             android:paddingTop="14dp"
             android:paddingEnd="20dp"
             android:paddingBottom="18dp">
-
-            <TextView
-                android:id="@+id/main_eyebrow"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="WEMEW · LRC SYNC"
-                android:textColor="#F40861"
-                android:textSize="11sp"
-                android:textStyle="bold" />
 
             <LinearLayout
                 android:id="@+id/main_page_host"

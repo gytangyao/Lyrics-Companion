@@ -96,19 +96,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- 全民K歌歌词读取：无障碍读取演唱界面的歌名与逐秒计时，喂入词库匹配管线。 -->
-        <service
-            android:name=".WeSingLyricReader"
-            android:exported="false"
-            android:label="全民K歌歌词读取"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/wesing_reader_config" />
-        </service>
 
         <service
             android:name=".MusicNotificationListener"

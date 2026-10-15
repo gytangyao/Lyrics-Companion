@@ -1,15 +1,11 @@
 package wemew.lrc.sync;
 
-import android.Manifest;
 import android.annotation.SuppressLint;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -39,22 +35,17 @@ public final class MainActivity extends AppCompatActivity {
     private static final long LISTENER_INITIAL_RECONNECT_DELAY_MS = 2_500L;
     private static final long LISTENER_RECONNECT_INTERVAL_MS = 1_000L;
     private static final long LISTENER_RECONNECT_WINDOW_MS = 30_000L;
-    private static final int PERMISSION_CHECK_NOTIFICATION = 1;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private TextView bindingHeadline;
-    private TextView bindingStore;
-    private TextView bindingDevice;
-    private TextView bindingMeta;
+    private TextView storeNameValue;
+    private TextView storeIdValue;
+    private TextView deviceIdValue;
+    private TextView versionValue;
     private TextView cloudStatus;
     private TextView cloudPush;
-    private TextView wesingStatus;
     private TextView musicTitle;
     private TextView musicSource;
     private TextView lyricDetail;
     private MaterialButton outputToggle;
-    private LinearLayout permissionRows;
-    private boolean permissionDialogVisible;
-    private int pendingPermissionCheck;
     private boolean activityResumed;
     private boolean listenerReconnectScheduled;
     private long listenerReconnectDeadlineElapsedMs;
@@ -111,9 +102,6 @@ public final class MainActivity extends AppCompatActivity {
         ensureNotificationListenerConnected();
         handler.removeCallbacks(statusRefresh);
         handler.post(statusRefresh);
-        // Some ROMs update the permission state a moment after their Settings page closes.
-        // Check after that hand-off so a newly granted switch never produces a false warning.
-        handler.postDelayed(this::promptPermissionIfStillMissing, 350L);
     }
 
     @Override protected void onPause() {
@@ -129,69 +117,36 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout root = shell.findViewById(R.id.main_content);
         LinearLayout pageHost = shell.findViewById(R.id.main_page_host);
 
-        // ---- 门店授权 ----
-        LinearLayout bindingCard = card();
-        bindingCard.addView(sectionLabel("门店授权"));
-        bindingHeadline = text("", 16, 0xFFF3F7FC, true);
-        bindingHeadline.setPadding(0, dp(8), 0, dp(4));
-        bindingCard.addView(bindingHeadline);
-        bindingStore = text("", 14, 0xFFF40861, false);
-        bindingStore.setPadding(0, 0, 0, dp(6));
-        bindingCard.addView(bindingStore);
-        LinearLayout deviceRow = new LinearLayout(this);
-        deviceRow.setOrientation(LinearLayout.HORIZONTAL);
-        deviceRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView deviceLabel = text("设备码", 13, 0xFFADABF2, false);
-        deviceRow.addView(deviceLabel, new LinearLayout.LayoutParams(-2, -2));
-        bindingDevice = text("", 15, 0xFFF3F7FC, true);
-        if (Build.VERSION.SDK_INT >= 21) bindingDevice.setLetterSpacing(0.12f);
-        bindingDevice.setPadding(dp(10), 0, dp(10), 0);
-        deviceRow.addView(bindingDevice, new LinearLayout.LayoutParams(0, -2, 1f));
-        MaterialButton copyDevice = button("复制", false);
-        copyDevice.setOnClickListener(v -> copyText("设备码",
-                StoreBindingClient.deviceId(this)));
-        copyDevice.setMinWidth(dp(72));
-        deviceRow.addView(copyDevice,
-                new LinearLayout.LayoutParams(-2, dp(42)));
-        bindingCard.addView(deviceRow);
-        TextView bindingHint = text("请把设备码登记到微喵门店后台完成授权；绑定后自动同步门店信息。",
-                12, 0xFF7A7FA5, false);
-        bindingHint.setLineSpacing(0f, 1.2f);
-        bindingHint.setPadding(0, dp(6), 0, dp(2));
-        bindingCard.addView(bindingHint);
-        bindingMeta = text("", 12, 0xFF7A7FA5, false);
-        bindingMeta.setPadding(0, dp(2), 0, 0);
-        bindingCard.addView(bindingMeta);
+        // ---- 基本信息（仅显示） ----
+        LinearLayout basicCard = card();
+        basicCard.addView(sectionLabel("基本信息"));
+        storeNameValue = infoRow(basicCard, "门店名称");
+        storeIdValue = infoRow(basicCard, "门店Id");
+        deviceIdValue = infoRow(basicCard, "设备Id");
+        versionValue = infoRow(basicCard, "软件版本");
 
-        // ---- 同步状态 ----
+        // ---- 系统运行状态 ----
         LinearLayout syncCard = card();
-        syncCard.addView(sectionLabel("同步状态"));
+        syncCard.addView(sectionLabel("系统运行状态"));
         cloudStatus = text("", 14, 0xFFF40861, true);
         cloudStatus.setPadding(0, dp(8), 0, dp(2));
         syncCard.addView(cloudStatus);
-        TextView cloudHint = text("同步经微喵云门店房间转发，显示端只需门店号即可连接，"
-                + "显示页在仓库 web-test-client（?barId=门店号）。",
-                12, 0xFF7A7FA5, false);
-        cloudHint.setLineSpacing(0f, 1.2f);
-        syncCard.addView(cloudHint);
         cloudPush = text("", 12, 0xFF7A7FA5, false);
         cloudPush.setPadding(0, dp(4), 0, 0);
         syncCard.addView(cloudPush);
-        wesingStatus = text("", 13, 0xFFADABF2, false);
-        wesingStatus.setPadding(0, dp(6), 0, 0);
-        syncCard.addView(wesingStatus);
-        // ---- 歌词信息 ----
-        LinearLayout lyricCard = card();
-        lyricCard.addView(sectionLabel("歌词信息"));
         musicTitle = text("等待播放器…", 16, 0xFFF3F7FC, true);
-        musicTitle.setPadding(0, dp(8), 0, dp(2));
-        lyricCard.addView(musicTitle);
+        musicTitle.setPadding(0, dp(10), 0, dp(2));
+        syncCard.addView(musicTitle);
         musicSource = text("", 13, 0xFFADABF2, false);
         musicSource.setPadding(0, 0, 0, dp(2));
-        lyricCard.addView(musicSource);
+        syncCard.addView(musicSource);
         lyricDetail = text("", 13, 0xFF8B90B8, false);
         lyricDetail.setPadding(0, 0, 0, dp(6));
-        lyricCard.addView(lyricDetail);
+        syncCard.addView(lyricDetail);
+
+        // ---- 操作 ----
+        LinearLayout actionCard = card();
+        actionCard.addView(sectionLabel("操作"));
         outputToggle = button("停止大屏歌词（仅本曲）", true);
         outputToggle.setOnClickListener(v -> {
             String pausedSong = AppPreferences.pausedSongKey(this);
@@ -209,56 +164,82 @@ public final class MainActivity extends AppCompatActivity {
             refreshLyric();
         });
         LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(-1, dp(46));
-        lyricCard.addView(outputToggle, toggleParams);
+        actionCard.addView(outputToggle, toggleParams);
         MaterialButton rematch = button("修正歌曲信息并重新匹配", false);
         rematch.setOnClickListener(v -> showLyricRematchDialog());
         LinearLayout.LayoutParams rematchParams = new LinearLayout.LayoutParams(-1, dp(46));
         rematchParams.topMargin = dp(8);
-        lyricCard.addView(rematch, rematchParams);
+        actionCard.addView(rematch, rematchParams);
 
-        // ---- 权限 ----
-        LinearLayout permissionCard = card();
-        permissionCard.addView(sectionLabel("使用权限"));
-        permissionRows = new LinearLayout(this);
-        permissionRows.setOrientation(LinearLayout.VERTICAL);
-        permissionCard.addView(permissionRows);
+        // ---- 系统维护 ----
+        LinearLayout maintenanceCard = card();
+        maintenanceCard.addView(sectionLabel("系统维护"));
+        MaterialButton guide = button("重新引导", false);
+        guide.setOnClickListener(v -> {
+            Intent intent = new Intent(this, OnboardingActivity.class);
+            intent.putExtra("mode", AppPreferences.musicSourceMode(this));
+            startActivity(intent);
+        });
+        maintenanceCard.addView(guide, new LinearLayout.LayoutParams(-1, dp(46)));
+        MaterialButton update = button("检测更新", false);
+        update.setOnClickListener(v ->
+                SafeToast.show(this, "检测更新即将上线", Toast.LENGTH_SHORT));
+        LinearLayout.LayoutParams updateParams = new LinearLayout.LayoutParams(-1, dp(46));
+        updateParams.topMargin = dp(8);
+        maintenanceCard.addView(update, updateParams);
+        MaterialButton logs = button("系统日志", false);
+        logs.setOnClickListener(v ->
+                SafeToast.show(this, "系统日志即将上线", Toast.LENGTH_SHORT));
+        LinearLayout.LayoutParams logsParams = new LinearLayout.LayoutParams(-1, dp(46));
+        logsParams.topMargin = dp(8);
+        maintenanceCard.addView(logs, logsParams);
 
-        pageHost.addView(bindingCard, cardMargins());
+        pageHost.addView(basicCard, cardMargins());
         pageHost.addView(syncCard, cardMargins());
-        pageHost.addView(lyricCard, cardMargins());
-        pageHost.addView(permissionCard, cardMargins());
+        pageHost.addView(actionCard, cardMargins());
+        pageHost.addView(maintenanceCard, cardMargins());
         return shell;
     }
 
-    private void refreshStatus() {
-        refreshBinding();
-        refreshSync();
-        refreshLyric();
-        refreshPermissions();
+    /** A label:value display row inside the basic-info card. */
+    private TextView infoRow(LinearLayout parent, String label) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        TextView labelView = text(label, 13, 0xFF7A7FA5, false);
+        labelView.setMinWidth(dp(72));
+        row.addView(labelView, new LinearLayout.LayoutParams(-2, -2));
+        TextView value = text("", 15, 0xFFF3F7FC, true);
+        value.setPadding(dp(8), 0, 0, 0);
+        row.addView(value, new LinearLayout.LayoutParams(0, -2, 1f));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.topMargin = dp(8);
+        parent.addView(row, params);
+        return value;
     }
 
-    private void refreshBinding() {
+    private void refreshStatus() {
+        refreshBasicInfo();
+        refreshSync();
+        refreshLyric();
+    }
+
+    private void refreshBasicInfo() {
         String barId = AppPreferences.boundBarId(this);
         String barName = AppPreferences.boundBarName(this);
         boolean bound = !barId.isEmpty();
-        bindingHeadline.setText(bound ? "已绑定门店" : "未绑定");
-        bindingHeadline.setTextColor(bound ? 0xFFF40861 : 0xFFF4E230);
-        bindingStore.setText(bound ? barName + "（" + barId + "）" : "");
-        bindingDevice.setText(StoreBindingClient.deviceId(this));
-        long lastCheck = AppPreferences.bindingLastCheckMs(this);
-        String error = AppPreferences.bindingLastError(this);
-        StringBuilder meta = new StringBuilder();
-        boolean checkFailed = error != null && !error.trim().isEmpty();
-        if (lastCheck > 0L) {
-            meta.append(checkFailed ? "检查失败" : "最近检查")
-                    .append(" ").append(formatAge(lastCheck)).append("前");
+        storeNameValue.setText(bound ? barName : "未绑定");
+        storeIdValue.setText(bound ? barId : "—");
+        deviceIdValue.setText(StoreBindingClient.deviceId(this));
+        versionValue.setText(appVersion());
+    }
+
+    private String appVersion() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable ignored) {
+            return "unknown";
         }
-        if (checkFailed) {
-            if (meta.length() > 0) meta.append(" · ");
-            meta.append("错误：").append(error);
-        }
-        bindingMeta.setText(meta.toString());
-        bindingMeta.setTextColor(checkFailed ? 0xFFF4E230 : 0xFF7A7FA5);
     }
 
     private void refreshSync() {
@@ -277,15 +258,6 @@ public final class MainActivity extends AppCompatActivity {
         }
         String push = WebSyncService.pushSummary();
         cloudPush.setText(push == null || push.isEmpty() ? "" : "最近推送：" + push);
-        boolean wesingEnabled = WeSingLyricReader.enabled(this);
-        boolean wesingReading = WeSingLyricReader.reading();
-        String identity = WeSingLyricReader.lastIdentity();
-        int collected = WeSingLyricReader.collectedLines();
-        wesingStatus.setText(!wesingEnabled ? "全民K歌：未启用无障碍读取（权限卡可开启）"
-                : wesingReading ? "全民K歌：读取中 · " + (identity.isEmpty() ? "" : identity + " · ")
-                        + collected + " 行屏幕歌词"
-                : "全民K歌：已启用，等待演唱");
-        wesingStatus.setTextColor(wesingReading ? 0xFFF40861 : 0xFFADABF2);
     }
 
     private void refreshLyric() {
@@ -301,8 +273,7 @@ public final class MainActivity extends AppCompatActivity {
                 : " - " + snapshot.artist));
         String listenerState = listenerState(hasNotificationAccess());
         musicSource.setText("来源：" + snapshot.sourceName
-                + "    读取方式：" + backendDescription()
-                + "    监听器：" + listenerState);
+                + "\n监听器：" + listenerState);
         String matchState;
         if (snapshot.liveLyricActive) {
             matchState = "播放器实时歌词";
@@ -321,7 +292,7 @@ public final class MainActivity extends AppCompatActivity {
             if (line.words != null && line.words.size() > 1) wordTimed++;
         }
         String timing = total == 0 ? ""
-                : "    逐字时间轴 " + wordTimed + "/" + total + " 行"
+                : "\n逐字时间轴 " + wordTimed + "/" + total + " 行"
                         + (wordTimed > 0 ? "" : "（行级，整行渐变）");
         lyricDetail.setText("匹配：" + matchState + timing);
         boolean paused = !AppPreferences.pausedSongKey(this).isEmpty();
@@ -337,39 +308,6 @@ public final class MainActivity extends AppCompatActivity {
                 : themeColor(com.google.android.material.R.attr.colorPrimary, 0xFFF40861)));
         outputToggle.setTextColor(paused ? 0xFF0B0E1C
                 : themeColor(com.google.android.material.R.attr.colorOnPrimary, 0xFFFFFFFF));
-    }
-
-    private void refreshPermissions() {
-        permissionRows.removeAllViews();
-        if (!hasNotificationAccess()) {
-            addPermissionRow(permissionRows, "音乐读取权限", true, v -> openNotificationAccess());
-        }
-        if (!WeSingLyricReader.enabled(this)) {
-            addPermissionRow(permissionRows, "全民K歌读取", false,
-                    v -> openAccessibilitySettings());
-        }
-        if (!isIgnoringBatteryOptimizations()) {
-            addPermissionRow(permissionRows, "后台不受限（电池白名单）", false,
-                    v -> requestBatteryWhitelist());
-        }
-        boolean postNotifications = Build.VERSION.SDK_INT < 33
-                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                == PackageManager.PERMISSION_GRANTED;
-        if (!postNotifications) {
-            addPermissionRow(permissionRows, "通知显示权限", false,
-                    v -> requestPostNotificationPermission());
-        }
-        addPermissionRow(permissionRows, "应用详情", false, v -> openApplicationDetails(),
-                "重新运行引导", true, v -> {
-                    Intent guide = new Intent(this, OnboardingActivity.class);
-                    guide.putExtra("mode", AppPreferences.musicSourceMode(this));
-                    startActivity(guide);
-                });
-        TextView status = text("通知读取 " + (hasNotificationAccess() ? "已授权" : "未授权")
-                + "     监听器 " + listenerState(hasNotificationAccess()),
-                12, 0xFF8B90B8, false);
-        status.setPadding(0, dp(6), 0, 0);
-        permissionRows.addView(status);
     }
 
     private void showLyricRematchDialog() {
@@ -412,25 +350,40 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout.LayoutParams catalogLabelParams = new LinearLayout.LayoutParams(-1, -2);
         catalogLabelParams.topMargin = dp(12);
         content.addView(catalogLabel, catalogLabelParams);
-        LinearLayout catalogRow = new LinearLayout(this);
-        for (int i = 0; i < catalogs.length; i++) {
-            final int index = i;
-            MaterialButton item = button(labels[i], i == selectedIndex[0]);
-            item.setOnClickListener(v -> {
-                selectedIndex[0] = index;
-                for (int c = 0; c < catalogRow.getChildCount(); c++) {
-                    highlightCatalogButton((MaterialButton) catalogRow.getChildAt(c),
-                            c == selectedIndex[0]);
-                }
-            });
-            highlightCatalogButton(item, i == selectedIndex[0]);
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(42), 1f);
-            if (i > 0) params.leftMargin = dp(4);
-            catalogRow.addView(item, params);
+        // Three rows of two: MIUI dialogs are ~300dp of content width, so two columns
+        // are the most the five-character catalog labels fit without clipping.
+        LinearLayout catalogGrid = new LinearLayout(this);
+        catalogGrid.setOrientation(LinearLayout.VERTICAL);
+        for (int row = 0; row < 3; row++) {
+            LinearLayout catalogRow = new LinearLayout(this);
+            catalogRow.setOrientation(LinearLayout.HORIZONTAL);
+            for (int col = 0; col < 2; col++) {
+                final int index = row * 2 + col;
+                MaterialButton item = button(labels[index], index == selectedIndex[0]);
+                item.setMinWidth(dp(120));
+                item.setMinHeight(dp(44));
+                item.setOnClickListener(v -> {
+                    selectedIndex[0] = index;
+                    for (int r = 0; r < catalogGrid.getChildCount(); r++) {
+                        LinearLayout gridRow = (LinearLayout) catalogGrid.getChildAt(r);
+                        for (int c = 0; c < gridRow.getChildCount(); c++) {
+                            highlightCatalogButton((MaterialButton) gridRow.getChildAt(c),
+                                    r * 2 + c == selectedIndex[0]);
+                        }
+                    }
+                });
+                highlightCatalogButton(item, index == selectedIndex[0]);
+                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(46), 1f);
+                if (col > 0) params.leftMargin = dp(8);
+                catalogRow.addView(item, params);
+            }
+            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, -2);
+            if (row > 0) rowParams.topMargin = dp(8);
+            catalogGrid.addView(catalogRow, rowParams);
         }
         LinearLayout.LayoutParams catalogParams = new LinearLayout.LayoutParams(-1, -2);
         catalogParams.topMargin = dp(8);
-        content.addView(catalogRow, catalogParams);
+        content.addView(catalogGrid, catalogParams);
         new MaterialAlertDialogBuilder(this)
                 .setTitle("修正歌曲信息并匹配歌词")
                 .setView(content)
@@ -506,38 +459,6 @@ public final class MainActivity extends AppCompatActivity {
         return button;
     }
 
-    private void addPermissionRow(LinearLayout parent, String firstLabel, boolean firstPrimary,
-                                  View.OnClickListener firstAction) {
-        addPermissionRow(parent, firstLabel, firstPrimary, firstAction,
-                null, false, null);
-    }
-
-    private void addPermissionRow(LinearLayout parent, String firstLabel, boolean firstPrimary,
-                                  View.OnClickListener firstAction, String secondLabel,
-                                  boolean secondPrimary, View.OnClickListener secondAction) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        MaterialButton first = button(firstLabel, firstPrimary);
-        first.setOnClickListener(firstAction);
-        row.addView(first, new LinearLayout.LayoutParams(0, dp(46), 1f));
-        if (secondLabel != null) {
-            MaterialButton second = button(secondLabel, secondPrimary);
-            second.setOnClickListener(secondAction);
-            LinearLayout.LayoutParams secondParams = new LinearLayout.LayoutParams(0, dp(46), 1f);
-            secondParams.leftMargin = dp(10);
-            row.addView(second, secondParams);
-        }
-        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, -2);
-        rowParams.topMargin = dp(8);
-        parent.addView(row, rowParams);
-    }
-
-    private void copyText(String label, String value) {
-        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText(label, value));
-        SafeToast.show(this, "已复制", Toast.LENGTH_SHORT);
-    }
-
     private boolean hasNotificationAccess() {
         String enabled = Settings.Secure.getString(getContentResolver(),
                 "enabled_notification_listeners");
@@ -550,24 +471,6 @@ public final class MainActivity extends AppCompatActivity {
         return false;
     }
 
-    private void openNotificationAccess() {
-        if (startPermissionSettingsActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"),
-                PERMISSION_CHECK_NOTIFICATION)) {
-            return;
-        }
-        // Notification access exists on Android 4.4, but its public settings action was only
-        // added in API 22. AOSP KitKat exposes this activity; vendor ROMs may not, so keep
-        // every fallback resolve-checked.
-        Intent kitKatNotificationAccess = new Intent().setComponent(new ComponentName(
-                "com.android.settings", "com.android.settings.Settings$NotificationAccessSettingsActivity"));
-        if (startPermissionSettingsActivity(kitKatNotificationAccess, PERMISSION_CHECK_NOTIFICATION)) return;
-        if (startPermissionSettingsActivity(new Intent(Settings.ACTION_SECURITY_SETTINGS),
-                PERMISSION_CHECK_NOTIFICATION)) return;
-        if (startPermissionSettingsActivity(new Intent(Settings.ACTION_SETTINGS),
-                PERMISSION_CHECK_NOTIFICATION)) return;
-        SafeToast.show(this, "无法打开系统的通知读取设置，请在系统设置中手动开启。",
-                Toast.LENGTH_LONG);
-    }
 
     private boolean startSettingsActivity(Intent intent) {
         try {
@@ -579,27 +482,7 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
-    private boolean startPermissionSettingsActivity(Intent intent, int permissionType) {
-        if (!startSettingsActivity(intent)) return false;
-        pendingPermissionCheck |= permissionType;
-        return true;
-    }
 
-    private void promptPermissionIfStillMissing() {
-        if (pendingPermissionCheck == 0 || permissionDialogVisible || isFinishing()) return;
-        int pending = pendingPermissionCheck;
-        pendingPermissionCheck = 0;
-        boolean notificationMissing = (pending & PERMISSION_CHECK_NOTIFICATION) != 0
-                && !hasNotificationAccess();
-        if (!notificationMissing) return;
-        permissionDialogVisible = true;
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("权限仍未生效")
-                .setMessage("检测到“音乐读取权限”仍未授权。不同系统可能将开关放在额外的安全、通知或应用管理页面，请在系统设置中找到“通知使用权”并允许本应用。")
-                .setPositiveButton("知道了", (dialog, which) -> { })
-                .setOnDismissListener(dialog -> permissionDialogVisible = false)
-                .show();
-    }
 
     private void ensureNotificationListenerConnected() {
         handler.removeCallbacks(listenerReconnect);
@@ -623,72 +506,9 @@ public final class MainActivity extends AppCompatActivity {
         return "超时";
     }
 
-    private static String backendDescription() {
-        String active = MusicNotificationListener.getBackendName();
-        if (active != null && !active.trim().isEmpty()) return active;
-        return Build.VERSION.SDK_INT >= 21 ? "MediaSession" : "RemoteController";
-    }
 
-    private static String formatAge(long atMs) {
-        long ageMs = Math.max(0L, System.currentTimeMillis() - atMs);
-        if (ageMs < 60_000L) return (ageMs / 1000L) + " 秒";
-        if (ageMs < 3_600_000L) return (ageMs / 60_000L) + " 分钟";
-        return (ageMs / 3_600_000L) + " 小时";
-    }
 
-    private void requestPostNotificationPermission() {
-        if (Build.VERSION.SDK_INT < 33) {
-            SafeToast.show(this, "当前系统无需单独授予通知显示权限", Toast.LENGTH_SHORT);
-            return;
-        }
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                == PackageManager.PERMISSION_GRANTED) {
-            SafeToast.show(this, "通知显示权限已授权", Toast.LENGTH_SHORT);
-            return;
-        }
-        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
-    }
 
-    private boolean isIgnoringBatteryOptimizations() {
-        if (Build.VERSION.SDK_INT < 23) return true;
-        android.os.PowerManager power = (android.os.PowerManager)
-                getSystemService(POWER_SERVICE);
-        return power != null && power.isIgnoringBatteryOptimizations(getPackageName());
-    }
-
-    private void requestBatteryWhitelist() {
-        if (Build.VERSION.SDK_INT < 23) return;
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("允许后台运行")
-                .setMessage("系统省电策略会冻结后台并断开云端同步。下一步的系统弹窗里选择「允许」。"
-                        + "小米/红米手机还需在 设置 → 应用管理 → 微喵歌词同步 → 省电策略 选择「无限制」，"
-                        + "并在最近任务中下拉锁定本应用。")
-                .setPositiveButton("去设置", (dialog, which) -> {
-                    try {
-                        startActivity(new Intent(
-                                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                Uri.parse("package:" + getPackageName())));
-                    } catch (Throwable error) {
-                        startSettingsActivity(new Intent(
-                                android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
-                    }
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
-
-    private void openAccessibilitySettings() {
-        if (startSettingsActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))) return;
-        SafeToast.show(this, "无法打开无障碍设置，请手动开启「全民K歌歌词读取」", Toast.LENGTH_LONG);
-    }
-
-    private void openApplicationDetails() {
-        Intent details = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:" + getPackageName()));
-        if (!startSettingsActivity(details)) {
-            startSettingsActivity(new Intent(Settings.ACTION_SETTINGS));
-        }
-    }
 
     private int themeColor(int attribute, int fallback) {
         android.util.TypedValue value = new android.util.TypedValue();
