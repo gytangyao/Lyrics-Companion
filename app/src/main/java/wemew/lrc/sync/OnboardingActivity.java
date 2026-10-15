@@ -40,9 +40,21 @@ public final class OnboardingActivity extends AppCompatActivity {
     private MaterialButton finishButton;
     private LinearLayout screen1;
     private LinearLayout screen2;
+    private LinearLayout screen3;
     private TextView screen2Title;
-    /** WeSing-only escape hatch; media mode must finish every required step. */
-    private TextView skipLink;
+    private TextView deviceCodeView;
+    private TextView bindingStatusView;
+    private TextView barNameView;
+    private TextView barIdView;
+    private MaterialButton finishButton3;
+    /** Light poll that re-reads the binding preferences while screen 3 is visible. */
+    private final android.os.Handler refreshHandler = new android.os.Handler();
+    private final Runnable bindingRefresh = new Runnable() {
+        @Override public void run() {
+            refreshBindingStatus();
+            refreshHandler.postDelayed(this, 3_000L);
+        }
+    };
     /** MIUI autostart has no query API; the user confirms it manually on that ROM. */
     private boolean autostartConfirmed;
 
@@ -57,12 +69,23 @@ public final class OnboardingActivity extends AppCompatActivity {
         mode = saved != null && !saved.isEmpty() ? saved : AppPreferences.musicSourceMode(this);
         setContentView(buildContent());
         refreshChecklist();
+        // The binding poll and cloud leg live in the sync service; start it now so the
+        // authorization screen reflects a backend registration within seconds.
+        try {
+            WebSyncService.start(this);
+        } catch (Throwable ignored) { }
     }
 
     @Override protected void onResume() {
         super.onResume();
         // Settings round-trips land here; re-evaluate every checklist row.
         refreshChecklist();
+        if (screen3 != null && screen3.getVisibility() == View.VISIBLE) startBindingRefresh();
+    }
+
+    @Override protected void onPause() {
+        stopBindingRefresh();
+        super.onPause();
     }
 
     private View buildContent() {
@@ -72,10 +95,110 @@ public final class OnboardingActivity extends AppCompatActivity {
 
         screen1 = buildSourceScreen();
         screen2 = buildPermissionScreen();
+        screen3 = buildBindingScreen();
         screen2.setVisibility(View.GONE);
+        screen3.setVisibility(View.GONE);
         root.addView(screen1, new LinearLayout.LayoutParams(-1, 0, 1f));
         root.addView(screen2, new LinearLayout.LayoutParams(-1, 0, 1f));
+        root.addView(screen3, new LinearLayout.LayoutParams(-1, 0, 1f));
         return root;
+    }
+
+    // ---- screen 3: device authorization (shared by both modes) --------------------
+
+    private LinearLayout buildBindingScreen() {
+        LinearLayout page = page();
+        TextView back = text("←  上一步", 14, 0xFFF40861, true);
+        back.setPadding(dp(4), dp(6), dp(4), dp(6));
+        back.setOnClickListener(v -> {
+            stopBindingRefresh();
+            screen3.setVisibility(View.GONE);
+            screen2.setVisibility(View.VISIBLE);
+        });
+        page.addView(back, wrap());
+        TextView title = text("设备授权", 22, 0xFFF3F7FC, true);
+        title.setPadding(dp(4), dp(2), dp(4), dp(4));
+        page.addView(title, wrap());
+        TextView subtitle = text("把设备码登记到微喵门店后台，绑定后自动连接门店房间",
+                13, 0xFFADABF2, false);
+        subtitle.setLineSpacing(0f, 1.2f);
+        subtitle.setPadding(dp(4), dp(2), dp(4), dp(4));
+        page.addView(subtitle, wrap());
+
+        LinearLayout codeCard = new LinearLayout(this);
+        codeCard.setOrientation(LinearLayout.VERTICAL);
+        codeCard.setGravity(Gravity.CENTER_HORIZONTAL);
+        codeCard.setPadding(dp(16), dp(18), dp(16), dp(18));
+        MaterialShapeDrawable surface = new MaterialShapeDrawable();
+        surface.setFillColor(ColorStateList.valueOf(0xFF1C1D2C));
+        surface.setCornerSize(dp(20));
+        codeCard.setBackground(surface);
+        TextView codeLabel = text("设备码", 13, 0xFFADABF2, false);
+        codeCard.addView(codeLabel, wrap());
+        deviceCodeView = text(StoreBindingClient.deviceId(this), 22, 0xFFF3F7FC, true);
+        if (Build.VERSION.SDK_INT >= 21) deviceCodeView.setLetterSpacing(0.18f);
+        deviceCodeView.setPadding(0, dp(6), 0, dp(10));
+        codeCard.addView(deviceCodeView, wrap());
+        MaterialButton copy = button("复制设备码", false);
+        copy.setOnClickListener(v -> {
+            android.content.ClipboardManager clipboard =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("设备码",
+                        StoreBindingClient.deviceId(this)));
+            }
+            SafeToast.show(this, "设备码已复制", Toast.LENGTH_SHORT);
+        });
+        codeCard.addView(copy, new LinearLayout.LayoutParams(-1, dp(44)));
+        LinearLayout.LayoutParams codeParams = new LinearLayout.LayoutParams(-1, -2);
+        codeParams.topMargin = dp(8);
+        page.addView(codeCard, codeParams);
+
+        bindingStatusView = text("", 14, 0xFFF4E230, true);
+        bindingStatusView.setLineSpacing(0f, 1.2f);
+        bindingStatusView.setPadding(dp(4), dp(12), dp(4), dp(4));
+        page.addView(bindingStatusView, wrap());
+        barNameView = text("", 16, 0xFFF3F7FC, true);
+        barNameView.setPadding(dp(4), dp(2), dp(4), dp(2));
+        page.addView(barNameView, wrap());
+        barIdView = text("", 14, 0xFFADABF2, false);
+        barIdView.setPadding(dp(4), dp(2), dp(4), dp(4));
+        page.addView(barIdView, wrap());
+
+        LinearLayout bottom = new LinearLayout(this);
+        bottom.setOrientation(LinearLayout.VERTICAL);
+        bottom.setGravity(Gravity.BOTTOM);
+        finishButton3 = button("等待门店绑定…", true);
+        finishButton3.setEnabled(false);
+        finishButton3.setAlpha(0.45f);
+        finishButton3.setOnClickListener(v -> {
+            if (!AppPreferences.boundBarId(this).isEmpty()) finishOnboarding();
+        });
+        bottom.addView(finishButton3, new LinearLayout.LayoutParams(-1, dp(48)));
+        page.addView(bottom, new LinearLayout.LayoutParams(-1, -2));
+        return page;
+    }
+
+    private void refreshBindingStatus() {
+        if (bindingStatusView == null) return;
+        String barId = AppPreferences.boundBarId(this);
+        boolean bound = !barId.isEmpty();
+        bindingStatusView.setText(bound ? "已绑定" : "等待绑定…登记后约 30 秒内自动生效");
+        bindingStatusView.setTextColor(bound ? 0xFF7ADB9B : 0xFFF4E230);
+        barNameView.setText(bound ? "门店名称　" + AppPreferences.boundBarName(this) : "");
+        barIdView.setText(bound ? "门店Id　　" + barId : "");
+        finishButton3.setText(bound ? "完成，进入主界面" : "等待门店绑定…");
+        finishButton3.setEnabled(bound);
+        finishButton3.setAlpha(bound ? 1f : 0.45f);
+    }
+
+    private void startBindingRefresh() {
+        refreshHandler.removeCallbacks(bindingRefresh);
+        refreshHandler.post(bindingRefresh);
+    }
+
+    private void stopBindingRefresh() {
+        refreshHandler.removeCallbacks(bindingRefresh);
     }
 
     // ---- screen 1: source choice ------------------------------------------------
@@ -226,16 +349,14 @@ public final class OnboardingActivity extends AppCompatActivity {
         LinearLayout bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.VERTICAL);
         bottom.setGravity(Gravity.BOTTOM);
-        finishButton = button("完成，进入主界面", true);
-        finishButton.setOnClickListener(v -> finishOnboarding());
+        finishButton = button("下一步", true);
+        finishButton.setOnClickListener(v -> {
+            screen2.setVisibility(View.GONE);
+            screen3.setVisibility(View.VISIBLE);
+            startBindingRefresh();
+            refreshBindingStatus();
+        });
         bottom.addView(finishButton, new LinearLayout.LayoutParams(-1, dp(48)));
-        // Media mode is strictly gated; WeSing's guide is reserved for a later spec,
-        // so its escape hatch stays for now (visibility tracks the chosen mode).
-        skipLink = text("稍后再说（主界面权限卡可随时补齐）", 13, 0xFF8B90B8, false);
-        skipLink.setGravity(Gravity.CENTER);
-        skipLink.setPadding(0, dp(10), 0, dp(4));
-        skipLink.setOnClickListener(v -> finishOnboarding());
-        bottom.addView(skipLink, new LinearLayout.LayoutParams(-1, -2));
         page.addView(bottom, new LinearLayout.LayoutParams(-1, -2));
         return page;
     }
@@ -249,9 +370,6 @@ public final class OnboardingActivity extends AppCompatActivity {
         if (permissionList == null) return;
         permissionList.removeAllViews();
         if (screen2Title != null) screen2Title.setText(modeTitle());
-        if (skipLink != null) {
-            skipLink.setVisibility("wesing".equals(mode) ? View.VISIBLE : View.GONE);
-        }
 
         if ("media".equals(mode)) {
             addCheckRow("音乐读取权限（通知使用权）", hasNotificationAccess(),
@@ -289,7 +407,7 @@ public final class OnboardingActivity extends AppCompatActivity {
                     "电脑离线时手机端行级歌词兜底", v -> openAccessibilitySettings());
         }
 
-        finishButton.setText(requiredDone() ? "完成，进入主界面" : "完成必选项后继续");
+        finishButton.setText(requiredDone() ? "下一步" : "完成必选项后继续");
         finishButton.setEnabled(requiredDone());
         finishButton.setAlpha(requiredDone() ? 1f : 0.45f);
     }
