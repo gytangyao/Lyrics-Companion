@@ -91,6 +91,7 @@ public final class WebSyncService extends Service {
         startInForeground();
         watchdogHandler.removeCallbacks(watchdog);
         watchdogHandler.postDelayed(watchdog, WATCHDOG_INTERVAL_MS);
+        AppLog.i("WebSync", "service started (pid=" + android.os.Process.myPid() + ")");
         DiagnosticLog.record(this, "WebSync", "cloud sync service started");
     }
 
@@ -108,6 +109,7 @@ public final class WebSyncService extends Service {
         if (cloudSync != null) cloudSync.stop();
         if (bindingClient != null) bindingClient.stop();
         if (publisher != null) publisher.stop();
+        AppLog.i("WebSync", "service stopped");
         DiagnosticLog.record(this, "WebSync", "cloud sync service stopped");
         super.onDestroy();
     }

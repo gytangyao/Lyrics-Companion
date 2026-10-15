@@ -61,6 +61,8 @@ final class CloudSyncClient {
     private volatile long lastInboundElapsedMs;
     /** Last heartbeat from the PC watcher; fresh means it owns WeSing publishing. */
     private volatile long watcherLastSeenElapsedMs;
+    /** True from connect() until onOpen/onClose settles the handshake attempt. */
+    private volatile boolean connecting;
     /**
      * A half-open TCP looks alive locally (writes buffer silently), so a connection that
      * stops echoing within this window is treated as dead and recycled.
@@ -128,7 +130,9 @@ final class CloudSyncClient {
     private void syncConnection() {
         if (stopped) return;
         WebSocketClient current = client;
-        boolean rightRoom = current != null && current.isOpen()
+        // A socket mid-handshake is already on its way to the right room; closing it
+        // here would churn connections every time a lifecycle event re-applies the barId.
+        boolean rightRoom = current != null && (current.isOpen() || connecting)
                 && current.getURI().toString().endsWith(barId);
         if (barId.isEmpty()) {
             closeClient();
@@ -151,9 +155,11 @@ final class CloudSyncClient {
 
     private void connect() {
         final String url = ROOM_BASE + barId;
+        AppLog.i(TAG, "connecting: " + url);
         try {
             WebSocketClient fresh = new WebSocketClient(URI.create(url)) {
                 @Override public void onOpen(ServerHandshake handshake) {
+                    connecting = false;
                     if (stopped) {
                         close();
                         return;
@@ -172,11 +178,15 @@ final class CloudSyncClient {
                 }
 
                 @Override public void onClose(int code, String reason, boolean remote) {
+                    connecting = false;
                     if (stopped) return;
+                    AppLog.w(TAG, "closed code=" + code + " remote=" + remote
+                            + " reason=" + reason + "; retry in " + RECONNECT_MS + "ms");
                     handler.postDelayed(CloudSyncClient.this::syncConnection, RECONNECT_MS);
                 }
 
                 @Override public void onError(Exception error) {
+                    AppLog.w(TAG, "ws error: " + error);
                     Log.d(TAG, "cloud error: " + error);
                 }
             };
@@ -186,6 +196,7 @@ final class CloudSyncClient {
                 } catch (Throwable ignored) { }
             }
             client = fresh;
+            connecting = true;
             fresh.connect();
         } catch (Throwable error) {
             Log.w(TAG, "cloud connect failed", error);
@@ -203,6 +214,8 @@ final class CloudSyncClient {
         // Self-liveness: the relay echoes our heartbeat back, so silence means a zombie link.
         if (lastInboundElapsedMs > 0L
                 && SystemClock.elapsedRealtime() - lastInboundElapsedMs > ZOMBIE_TIMEOUT_MS) {
+            AppLog.w(TAG, "zombie link (no echo for "
+                    + (SystemClock.elapsedRealtime() - lastInboundElapsedMs) + "ms); recycling");
             DiagnosticLog.record(context, "WebSync",
                     "cloud zombie link detected; recycling (" + barId + ")");
             closeClient();
