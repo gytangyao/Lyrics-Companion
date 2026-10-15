@@ -10,6 +10,8 @@ public final class WemewApp extends Application {
         super.onCreate();
         // 按时间段的配色在启动时就要落地（issue #34），否则设置页会停在系统主题上。
         applyMaterialTheme(AppPreferences.resolvedThemeMode(this));
+        AppLog.init(this);
+        AppLog.i("App", "process started");
         DiagnosticLog.record(this, "Application", "process started");
         DynamicColors.applyToActivitiesIfAvailable(this);
     }

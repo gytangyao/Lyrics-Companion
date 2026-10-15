@@ -30,6 +30,10 @@ final class CloudSyncClient {
     /** The phone is the lyric source; the display client is control_box (nbox naming). */
     static final String SENDER_PHONE = "control_box_phone";
     static final String SENDER_DISPLAY = "control_box";
+    /** PC-side WeSing watcher (wesing_watcher.js) announces itself with this deviceId. */
+    static final String WATCHER_DEVICE_ID = "wesing-watcher-pc";
+    /** A watcher heartbeat older than this no longer suppresses our WeSing publishing. */
+    private static final long WATCHER_TIMEOUT_MS = 8_000L;
     private static final long HEARTBEAT_MS = 2_000L;
     private static final long RECONNECT_MS = 5_000L;
     /** A display that stops heart-beating for this long is considered gone. */
@@ -55,6 +59,8 @@ final class CloudSyncClient {
     private volatile long lastSnapshotPushElapsed;
     /** Any inbound frame proves the relay still sees us; heartbeats echo back in ~RTT. */
     private volatile long lastInboundElapsedMs;
+    /** Last heartbeat from the PC watcher; fresh means it owns WeSing publishing. */
+    private volatile long watcherLastSeenElapsedMs;
     /**
      * A half-open TCP looks alive locally (writes buffer silently), so a connection that
      * stops echoing within this window is treated as dead and recycled.
@@ -152,6 +158,7 @@ final class CloudSyncClient {
                         close();
                         return;
                     }
+                    AppLog.i("WebSync", "cloud room joined: " + barId);
                     DiagnosticLog.record(context, "WebSync", "cloud room joined: " + barId);
                     lastInboundElapsedMs = SystemClock.elapsedRealtime();
                     handler.post(() -> {
@@ -231,6 +238,19 @@ final class CloudSyncClient {
                 && !inbound.data.optString("deviceId", "").isEmpty();
     }
 
+    /** True for the PC watcher's heartbeat: another phone-side source in the room. */
+    static boolean isWatcherOnline(WebProtocolCodec.Inbound inbound) {
+        return "online".equals(inbound.type) && SENDER_PHONE.equals(inbound.sender)
+                && inbound.data != null
+                && WATCHER_DEVICE_ID.equals(inbound.data.optString("deviceId", ""));
+    }
+
+    /** Whether the PC watcher heart-beated recently enough to own WeSing publishing. */
+    boolean watcherHeartbeatFresh() {
+        long last = watcherLastSeenElapsedMs;
+        return last > 0L && SystemClock.elapsedRealtime() - last < WATCHER_TIMEOUT_MS;
+    }
+
     /**
      * The cloud echoes every member's frames back to the whole room (including us), so the
      * classification here ignores our own traffic and only reacts to displays and their pings.
@@ -245,6 +265,10 @@ final class CloudSyncClient {
             send(WebProtocolCodec.pong(inbound.ts, System.currentTimeMillis()));
             return;
         }
+        if (isWatcherOnline(inbound)) {
+            watcherLastSeenElapsedMs = SystemClock.elapsedRealtime();
+            return;
+        }
         if (isDisplayOnline(inbound)) {
             String deviceId = inbound.data.optString("deviceId", "");
             boolean known;
@@ -257,8 +281,12 @@ final class CloudSyncClient {
             long now = SystemClock.elapsedRealtime();
             if (!known || now - lastSnapshotPushElapsed >= SNAPSHOT_MIN_INTERVAL_MS) {
                 lastSnapshotPushElapsed = now;
-                send(hooks.trackJson());
-                send(hooks.stateJson());
+                // Null = another source (the PC watcher) owns the current song; the
+                // watcher answers joining displays with its own snapshot.
+                String track = hooks.trackJson();
+                if (track != null) send(track);
+                String state = hooks.stateJson();
+                if (state != null) send(state);
             }
         }
     }

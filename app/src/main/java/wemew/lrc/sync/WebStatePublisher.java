@@ -4,6 +4,7 @@ import android.content.Context;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
+import android.text.TextUtils;
 import android.util.Log;
 
 /**
@@ -36,6 +37,8 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
     private volatile CloudSyncClient cloud;
     /** True while the wrong-track guard has already blanked the displays. */
     private boolean blankPushed;
+    /** True while the PC watcher's heartbeat makes it the WeSing publisher. */
+    private boolean deferringToWatcher;
 
     WebStatePublisher(Context context) {
         this.context = context.getApplicationContext();
@@ -90,6 +93,24 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
                 + "\n" + (sourceId == null ? "" : sourceId);
     }
 
+    /**
+     * The PC watcher (wesing_watcher.js) pushes exact word-level QRC timelines for WeSing
+     * straight into the room. While its heartbeat is fresh it owns publishing — two
+     * publishers would fight over every anchor (the losing frames blank the display).
+     * The phone only keeps the floor for a genuinely playing, titled track from another
+     * app: WeSing's own media session is anonymous and title-less ("音乐播放器"), so
+     * "active with empty title" is exactly the junk the watcher must shadow.
+     */
+    private boolean watcherOwnsWeSing() {
+        CloudSyncClient leg = cloud;
+        if (leg == null || !leg.watcherHeartbeatFresh()) return false;
+        MusicSnapshot snapshot = MusicStateStore.snapshot(0);
+        boolean otherAppPlaying = snapshot.active
+                && !"wesing".equals(MusicStateStore.activeSourceId())
+                && !TextUtils.isEmpty(snapshot.title);
+        return !otherAppPlaying;
+    }
+
     private void publish() {
         long nowWall = System.currentTimeMillis();
         long nowElapsed = SystemClock.elapsedRealtime();
@@ -97,6 +118,22 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
                 MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(context));
         LrcTimeline timeline = MusicStateStore.currentTimeline();
         float speed = MusicStateStore.playbackSpeed();
+
+        boolean defer = watcherOwnsWeSing();
+        if (defer != deferringToWatcher) {
+            deferringToWatcher = defer;
+            AppLog.i(TAG, defer ? "WeSing publishing handed to PC watcher"
+                    : "PC watcher gone; resuming WeSing publishing");
+            if (!defer) {
+                // Force a full track so displays switch back to our data immediately.
+                diff.trackKey = null;
+                diff.lastStatePushElapsedMs = null;
+            }
+        }
+        if (defer) {
+            lastPushSummary = "deferred to PC watcher";
+            return;
+        }
 
         // Wrong-track guard: only the paused song is blanked; a track change auto-resumes.
         String pausedSong = AppPreferences.pausedSongKey(context);
@@ -183,6 +220,7 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
     }
 
     @Override public String trackJson() {
+        if (watcherOwnsWeSing()) return null;
         MusicSnapshot snapshot =
                 MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(context));
         // A display joining while the current song is paused gets the blank, not a track.
@@ -201,6 +239,7 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
     }
 
     @Override public String stateJson() {
+        if (watcherOwnsWeSing()) return null;
         MusicSnapshot snapshot =
                 MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(context));
         lastStateJson = WebProtocolCodec.state(System.currentTimeMillis(), snapshot.active,

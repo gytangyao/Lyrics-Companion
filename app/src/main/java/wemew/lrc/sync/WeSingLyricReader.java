@@ -42,6 +42,8 @@ public final class WeSingLyricReader extends AccessibilityService {
     private long lastDurationMs = -1L;
     private String songKey = "";
     private String lastArtist = "";
+    /** Last play/pause state we logged, to keep AppLog volume at transitions only. */
+    private boolean lastLoggedPlaying;
     /** Lyric lines in start order: text → clock value when the line reached the ladder top. */
     private final LinkedHashMap<String, Long> lineStarts = new LinkedHashMap<>();
     /** The current ladder-top line; a change means the previous line ended and this started. */
@@ -105,8 +107,15 @@ public final class WeSingLyricReader extends AccessibilityService {
             if (!TextUtils.isEmpty(lastTitle) && !TextUtils.equals(title, lastTitle)) {
                 DiagnosticLog.record(this, "WeSing", "song changed: " + title);
             }
+            AppLog.i("WeSing", "song " + (TextUtils.isEmpty(lastTitle) ? "detected" : "changed")
+                    + ": 「" + title + "」 dur=" + clock.durationMs + "ms");
         }
         boolean playing = clock.positionMs != lastPositionMs;
+        if (newSong || playing != lastLoggedPlaying) {
+            lastLoggedPlaying = playing;
+            AppLog.i("WeSing", "state " + (playing ? "playing" : "paused")
+                    + " pos=" + clock.positionMs + "ms lines=" + lineStarts.size());
+        }
         lastPositionMs = clock.positionMs;
         lastDurationMs = clock.durationMs;
         lastTitle = title;
@@ -435,11 +444,13 @@ public final class WeSingLyricReader extends AccessibilityService {
     @Override protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
+        AppLog.i("WeSing", "reader connected");
         DiagnosticLog.record(this, "WeSing", "歌词读取服务已连接");
     }
 
     @Override public boolean onUnbind(android.content.Intent intent) {
         instance = null;
+        AppLog.i("WeSing", "reader unbound");
         DiagnosticLog.record(this, "WeSing", "歌词读取服务已断开");
         return super.onUnbind(intent);
     }
