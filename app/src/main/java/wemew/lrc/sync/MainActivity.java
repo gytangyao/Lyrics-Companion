@@ -91,8 +91,13 @@ public final class MainActivity extends AppCompatActivity {
             getWindow().setStatusBarColor(0xFF0B0E1C);
             getWindow().setNavigationBarColor(0xFF0B0E1C);
         }
-        setContentView(buildContent());
         MusicStateStore.initialize(this);
+        if (!AppPreferences.onboardingDone(this)) {
+            startActivity(new Intent(this, OnboardingActivity.class));
+            finish();
+            return;
+        }
+        setContentView(buildContent());
     }
 
     @Override protected void onResume() {
@@ -355,7 +360,11 @@ public final class MainActivity extends AppCompatActivity {
                     v -> requestPostNotificationPermission());
         }
         addPermissionRow(permissionRows, "应用详情", false, v -> openApplicationDetails(),
-                "权限正常", false, v -> refreshStatus());
+                "重新运行引导", true, v -> {
+                    Intent guide = new Intent(this, OnboardingActivity.class);
+                    guide.putExtra("mode", AppPreferences.musicSourceMode(this));
+                    startActivity(guide);
+                });
         TextView status = text("通知读取 " + (hasNotificationAccess() ? "已授权" : "未授权")
                 + "     监听器 " + listenerState(hasNotificationAccess()),
                 12, 0xFF8B90B8, false);

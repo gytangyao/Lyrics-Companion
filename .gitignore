@@ -25,3 +25,4 @@ app_today.xlog
 full_logcat.txt
 *.qrc
 !app/test.qrc
+ob*.png

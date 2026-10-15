@@ -40,6 +40,10 @@ final class AppPreferences {
     static final String KEY_BINDING_LAST_ERROR = "binding_last_error";
     /** Wrong-track guard: the song key whose display is blanked; cleared when it changes. */
     static final String KEY_PAUSED_SONG_KEY = "paused_song_key";
+    /** First-run guide: set once the user completed the source + permission walkthrough. */
+    static final String KEY_ONBOARDING_DONE = "onboarding_done";
+    /** Chosen lyric source mode from onboarding: "wesing" (PC watcher) or "media" sessions. */
+    static final String KEY_MUSIC_SOURCE_MODE = "music_source_mode";
 
     private AppPreferences() {}
 
@@ -312,5 +316,25 @@ final class AppPreferences {
     private static String normalizePackageName(String packageName) {
         String normalized = packageName == null ? "" : packageName.trim().toLowerCase();
         return normalized.matches("[a-z0-9_.]+") ? normalized : "";
+    }
+
+    /** Whether the first-run guide already ran on this install. */
+    static boolean onboardingDone(Context context) {
+        return get(context).getBoolean(KEY_ONBOARDING_DONE, false);
+    }
+
+    static void setOnboardingDone(Context context) {
+        get(context).edit().putBoolean(KEY_ONBOARDING_DONE, true).apply();
+    }
+
+    /** Lyric source chosen in onboarding: "wesing" or "media" (blank = never chosen). */
+    static String musicSourceMode(Context context) {
+        String mode = get(context).getString(KEY_MUSIC_SOURCE_MODE, "");
+        return "media".equals(mode) ? "media" : "wesing";
+    }
+
+    static void putMusicSourceMode(Context context, String mode) {
+        get(context).edit().putString(KEY_MUSIC_SOURCE_MODE,
+                "media".equals(mode) ? "media" : "wesing").apply();
     }
 }
