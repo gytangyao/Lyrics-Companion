@@ -207,6 +207,16 @@ public class MusicAppRegistryTest {
                 "晴天", false, MusicPlaybackData.STATE_NONE, false));
     }
 
+    @Test public void weSingTrustsItsExplicitPauseEvenWhenPositionTicks() {
+        // The watcher reads WeSing's real pause, so a PAUSED must stop the clock even though the
+        // sampled position still ticks forward by the pause frame's rounding.
+        assertFalse(MusicStateStore.isPositionAdvancing(
+                "晴天", true, MusicPlaybackData.STATE_PAUSED, true, true));
+        // The car-player fallback stays intact: the same inputs without the trust advance.
+        assertTrue(MusicStateStore.isPositionAdvancing(
+                "晴天", true, MusicPlaybackData.STATE_PAUSED, true, false));
+    }
+
     @Test public void rawPositionSamplesDistinguishPollingFromSeeking() {
         assertFalse(MusicStateStore.hasMeaningfulPositionChange(-1L, 12_000L));
         assertFalse(MusicStateStore.hasMeaningfulPositionChange(12_000L, 12_050L));

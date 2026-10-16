@@ -162,4 +162,90 @@ public class WebProtocolCodecTest {
         assertEquals("1.2.3", data.getJSONObject("server").getString("version"));
         assertTrue(data.getJSONArray("capabilities").length() >= 5);
     }
+
+    /** 200 lines x 20 words: the shape a full mirrored QRC timeline arrives as. */
+    private static LrcTimeline longTimeline() {
+        List<LrcTimeline.Line> lines = new ArrayList<>();
+        for (int i = 0; i < 200; i++) {
+            List<LrcTimeline.Word> words = new ArrayList<>();
+            StringBuilder text = new StringBuilder();
+            for (int w = 0; w < 20; w++) {
+                String syllable = "字" + w;
+                words.add(new LrcTimeline.Word(i * 5000 + w * 200, 190, syllable));
+                text.append(syllable);
+            }
+            lines.add(new LrcTimeline.Line(i * 5000L, 4600, text.toString(), null, words));
+        }
+        return LrcTimeline.fromTimedLines(lines);
+    }
+
+    private static int utf8(String text) {
+        return text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+    }
+
+    @org.junit.Test public void smallTimelineStaysInOneFrame() {
+        WebProtocolCodec.TrackStream stream =
+                WebProtocolCodec.trackStream(1L, payload(sampleTimeline()));
+        assertEquals(1, stream.frames.size());
+        assertEquals(0, stream.chunkCount);
+        assertEquals("", stream.id);
+        assertEquals(WebProtocolCodec.track(1L, payload(sampleTimeline())), stream.frames.get(0));
+    }
+
+    @org.junit.Test public void oversizedTimelineSplitsIntoChunksUnderTheCeiling()
+            throws Exception {
+        WebProtocolCodec.TrackPayload source = payload(longTimeline());
+        assertTrue("single frame should be oversized",
+                utf8(WebProtocolCodec.track(1L, source)) > WebProtocolCodec.MAX_FRAME_BYTES);
+
+        WebProtocolCodec.TrackStream stream = WebProtocolCodec.trackStream(1L, source);
+        assertTrue(stream.chunkCount > 1);
+        assertEquals(stream.chunkCount + 1, stream.frames.size());
+        for (String frame : stream.frames) {
+            assertTrue("frame exceeds the wire ceiling",
+                    utf8(frame) <= WebProtocolCodec.MAX_FRAME_BYTES);
+        }
+
+        JSONObject head = new JSONObject(stream.frames.get(0));
+        assertEquals("track", head.getString("type"));
+        JSONObject lyric = head.getJSONObject("data").getJSONObject("lyric");
+        assertFalse(lyric.getBoolean("live"));
+        assertFalse(lyric.has("lines"));
+        JSONObject promise = lyric.getJSONObject("stream");
+        assertEquals(stream.id, promise.getString("id"));
+        assertEquals(stream.chunkCount, promise.getInt("total"));
+        assertEquals(200, promise.getInt("lines"));
+
+        // The chunks, in the order they went out, must rebuild the timeline exactly.
+        List<JSONObject> parts = new ArrayList<>();
+        for (int i = 1; i < stream.frames.size(); i++) {
+            JSONObject chunk = new JSONObject(stream.frames.get(i));
+            assertEquals("lyric_chunk", chunk.getString("type"));
+            JSONObject data = chunk.getJSONObject("data");
+            assertEquals(stream.id, data.getString("id"));
+            assertEquals(i, data.getInt("seq"));
+            assertEquals(stream.chunkCount, data.getInt("total"));
+            parts.add(data);
+        }
+        int rebuilt = 0;
+        for (JSONObject part : parts) {
+            org.json.JSONArray lines = part.getJSONArray("lines");
+            for (int i = 0; i < lines.length(); i++) {
+                JSONObject line = lines.getJSONObject(i);
+                assertEquals(rebuilt * 5000, line.getLong("t"));
+                assertEquals(20, line.getJSONArray("words").length());
+                rebuilt++;
+            }
+        }
+        assertEquals(200, rebuilt);
+    }
+
+    @org.junit.Test public void streamIdFollowsTheTimelineNotTheClock() {
+        WebProtocolCodec.TrackPayload source = payload(longTimeline());
+        assertEquals(WebProtocolCodec.trackStream(1L, source).id,
+                WebProtocolCodec.trackStream(9_999L, source).id);
+        assertFalse(WebProtocolCodec.trackStream(1L, source).id
+                .equals(WebProtocolCodec.trackStream(1L, payload(sampleTimeline())).id));
+    }
 }
+

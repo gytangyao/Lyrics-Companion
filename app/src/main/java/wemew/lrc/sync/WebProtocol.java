@@ -19,13 +19,15 @@ final class WebProtocol {
     static final String TYPE_ERROR = "error";
     /** Displays clear everything and show no lyrics until the next track frame. */
     static final String TYPE_BLANK = "blank";
+    /** Part of a chunked timeline; follows a {@code track} frame whose lyric carries a stream. */
+    static final String TYPE_LYRIC_CHUNK = "lyric_chunk";
 
     /** Client → server message types. */
     static final String TYPE_HELLO = "hello";
     static final String TYPE_PING = "ping";
 
     /** Capabilities advertised in {@code welcome}; see the protocol doc for their meaning. */
-    static final String[] CAPABILITIES = {"track", "state", "line", "cover", "ping"};
+    static final String[] CAPABILITIES = {"track", "state", "line", "cover", "ping", "lyric_chunk"};
 
     /** Default LAN port; auto mode probes this and the next nine ports on bind failure. */
     static final int DEFAULT_PORT = 8765;

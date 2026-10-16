@@ -196,9 +196,18 @@ function qrcToLines(xml) {
 let ws = null;
 let wsOpen = false;
 
+/**
+ * Wire ceiling per frame. The relay buffers a whole inbound text message and 1009-closes the
+ * socket above ~8KB, while a word-level QRC timeline serializes to 10-12KB — so a timeline that
+ * big goes out as a track head plus lyric_chunk frames (docs/web-protocol.md).
+ */
+const MAX_FRAME_BYTES = 6000;
+
 function cloudPush(frame) {
     if (!wsOpen || !frame) return;
-    try { ws.send(frame); } catch (error) { log('cloud send failed: ' + error.message); }
+    for (const text of Array.isArray(frame) ? frame : [frame]) {
+        try { ws.send(text); } catch (error) { log('cloud send failed: ' + error.message); }
+    }
 }
 
 function envelope(type, data) {
@@ -212,8 +221,10 @@ function onlineFrame() {
     });
 }
 
-function trackFrame() {
-    return envelope('track', {
+const QRC_LYRIC_SOURCE_NAME = 'WeSing QRC 逐字';
+
+function trackHeadData() {
+    return {
         active: true,
         playing: state.phase === 'recording',
         title: state.title || state.songId,
@@ -224,12 +235,47 @@ function trackFrame() {
         positionMs: songPositionMs(),
         speed: 1.0,
         offsetMs: 0,
-        lyric: {
-            live: false,
-            sourceName: 'WeSing QRC 逐字',
-            lines: qrcToLines(state.qrcXml),
-        },
-    });
+    };
+}
+
+/** FNV-1a over the serialized timeline: the same song always hashes to the same stream id. */
+function streamId(lines) {
+    let hash = 0xcbf29ce484222325n;
+    for (const byte of Buffer.from(JSON.stringify(lines), 'utf8')) {
+        hash = ((hash ^ BigInt(byte)) * 0x100000001b3n) & 0xffffffffffffffffn;
+    }
+    return hash.toString(16).padStart(16, '0');
+}
+
+function trackFrames() {
+    const lines = qrcToLines(state.qrcXml);
+    const head = trackHeadData();
+    const matched = { live: false, sourceName: QRC_LYRIC_SOURCE_NAME, lines };
+    const single = envelope('track', { ...head, lyric: matched });
+    if (Buffer.byteLength(single, 'utf8') <= MAX_FRAME_BYTES) return [single];
+
+    // Greedy whole-line split against a worst-case envelope, mirroring WebProtocolCodec.
+    const budget = MAX_FRAME_BYTES - Buffer.byteLength(
+            envelope('lyric_chunk', { id: '', seq: 999, total: 999, lines: [] }), 'utf8');
+    const batches = [];
+    let batch = [];
+    let used = 0;
+    for (const line of lines) {
+        const cost = Buffer.byteLength(JSON.stringify(line), 'utf8') + 1;
+        if (batch.length && used + cost > budget) { batches.push(batch); batch = []; used = 0; }
+        batch.push(line);
+        used += cost;
+    }
+    if (batch.length) batches.push(batch);
+    const id = streamId(lines);
+    const frames = [envelope('track', {
+        ...head,
+        lyric: { live: false, sourceName: QRC_LYRIC_SOURCE_NAME,
+                stream: { id, total: batches.length, lines: lines.length } },
+    })];
+    batches.forEach((part, index) => frames.push(envelope('lyric_chunk',
+            { id, seq: index + 1, total: batches.length, lines: part })));
+    return frames;
 }
 
 function inactiveTrackFrame() {
@@ -250,8 +296,10 @@ function stateFrame(playing) {
 function pushTrackIfReady() {
     if (!state.songId || !state.qrcXml) return;
     state.trackPushed = true;
-    cloudPush(trackFrame());
-    if (wsOpen) log(`☁ track pushed 「${state.title}」 lines=${qrcToLines(state.qrcXml).length}`);
+    const frames = trackFrames();
+    cloudPush(frames);
+    if (wsOpen) log(`☁ track pushed 「${state.title}」 lines=${qrcToLines(state.qrcXml).length}`
+            + ` frames=${frames.length}`);
 }
 
 function startCloud() {

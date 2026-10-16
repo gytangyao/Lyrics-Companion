@@ -192,7 +192,7 @@ final class MusicStateStore {
             boolean sampledProgress = reportedPositionChanged
                     && newPosition > lastReportedPositionMs;
             boolean newPlaying = isPositionAdvancing(newTitle, statePresent, stateValue,
-                    sampledProgress);
+                    sampledProgress, "wesing".equals(normalizedSource));
             float effectiveSpeed = newPlaying ? (newSpeed > 0f ? newSpeed : 1f) : 0f;
             long positionToStore = newPosition;
             long positionTimeToStore = reportedPositionTime > 0L
@@ -781,6 +781,22 @@ final class MusicStateStore {
 
     static boolean isPositionAdvancing(String sessionTitle, boolean statePresent,
                                        int stateValue, boolean sampledProgress) {
+        return isPositionAdvancing(sessionTitle, statePresent, stateValue, sampledProgress, false);
+    }
+
+    /**
+     * @param trustExplicitStop when the source reports an authoritative transport state (the
+     *                          WeSing watcher reads the real pause), an explicit PAUSED/STOPPED/ERROR
+     *                          ends the clock even if the sampled position still ticks forward. Car
+     *                          players lie — they often report PAUSED while audio runs — so every
+     *                          other source keeps falling back to {@code sampledProgress}.
+     */
+    static boolean isPositionAdvancing(String sessionTitle, boolean statePresent,
+                                       int stateValue, boolean sampledProgress,
+                                       boolean trustExplicitStop) {
+        if (trustExplicitStop && (stateValue == MusicPlaybackData.STATE_PAUSED
+                || stateValue == MusicPlaybackData.STATE_STOPPED
+                || stateValue == MusicPlaybackData.STATE_ERROR)) return false;
         if (stateValue == MusicPlaybackData.STATE_PLAYING
                 || stateValue == MusicPlaybackData.STATE_FAST_FORWARDING
                 || stateValue == MusicPlaybackData.STATE_REWINDING) return true;

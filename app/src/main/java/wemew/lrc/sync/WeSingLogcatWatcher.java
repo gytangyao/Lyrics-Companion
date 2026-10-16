@@ -101,7 +101,12 @@ final class WeSingLogcatWatcher {
      * {@code stop sing} ends it — after that the player lines belong to the result page's preview.
      */
     private static final Pattern RE_SING_PAUSE = Pattern.compile(
-            "KaraRecordService:.*\\[UI\\]pause sing");
+            "KaraRecordService.*\\[UI\\]pause sing");
+    /** Alternative pause signals observed on this tablet's WeSing version (11.0.38.278). */
+    private static final Pattern RE_SING_PAUSE_ALT1 = Pattern.compile(
+            "SimpleKaraRecorder\\.SimpleRecordThread.*\\brun: enter into pause");
+    private static final Pattern RE_SING_PAUSE_ALT2 = Pattern.compile(
+            "StreamPlayerV2.*\\brun -> pause play");
     private static final Pattern RE_SING_STOP = Pattern.compile(
             "KaraRecordService:.*\\bstop sing");
     /** The recording page's own track length, in ms, on the line that hands it the accompaniment. */
@@ -441,12 +446,15 @@ final class WeSingLogcatWatcher {
             }
             return;
         }
-        if (RE_SING_PAUSE.matcher(line).find()) {
+        if (RE_SING_PAUSE.matcher(line).find() || RE_SING_PAUSE_ALT1.matcher(line).find()
+                || RE_SING_PAUSE_ALT2.matcher(line).find()) {
             if (takeLive && playing) {
                 posAtPauseMs = Math.max(0L, positionNow());
                 playing = false;
                 AppLog.i(TAG, "pause sing pos=" + posAtPauseMs + "ms");
                 publish();
+            } else {
+                AppLog.w(TAG, "pause sing ignored: takeLive=" + takeLive + " playing=" + playing);
             }
             return;
         }

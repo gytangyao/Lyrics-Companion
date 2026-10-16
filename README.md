@@ -16,6 +16,12 @@ App 本身不绘制任何歌词界面，也没有局域网直连通道——显�
   （角色 `control_box_phone`），推送 `{track, state, line, pong}`；显示端以 `control_box`
   进同一房间，进房即得快照。协议见
   **[docs/web-protocol.md](docs/web-protocol.md)**（对外契约，含时间同步模型与兼容规则）。
+- **大帧分帧传输**（protocol v1 `lyric_chunk`）：逐字时间轴典型 4–10KB，超 6KB 自动拆分为
+  `track` 头帧 + 多个 `lyric_chunk` 帧，规避云端中继 ~8KB 入站缓冲导致的 1009 断连风暴。
+  显示端按 stream id 组装，5 秒超时未完成则丢弃。
+- **全民K歌内嵌 watcher**：通过 `READ_LOGS` 权限（`adb shell pm grant` 一次性授权，重启保留）
+  直接读取 WeSing logcat，采集演唱生命周期（开唱/暂停/停止/切歌）与逐字 QRC 时间轴
+  （镜像 WeSing 的 `Android/data` QRC 文件），无需 PC、root、Shizuku 或无障碍服务。
 - **门店授权**：采用微喵设备身份绑定——App 生成稳定 12 位设备码，门店在微喵后台登记
   后，App 每 30 秒轮询拿到门店名/ID 并显示在首页。
 - **单页状态界面**：门店授权 · 同步状态（地址与在线显示端）· 歌词信息（逐字时间轴

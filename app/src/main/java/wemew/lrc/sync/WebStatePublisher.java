@@ -7,6 +7,9 @@ import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.Log;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Polls {@link MusicStateStore} on a light tick and pushes protocol frames into the cloud
  * room: a full {@code track} frame on track/timeline changes, a cheap {@code state} anchor
@@ -27,7 +30,6 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
     private int timelineEpoch;
     private HandlerThread thread;
     private Handler handler;
-    private String lastTrackJson;
     private String lastStateJson;
     /** Elapsed-realtime of the last completed tick; the service watchdog reads this. */
     private volatile long lastTickElapsedMs;
@@ -174,9 +176,11 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
         if (decision.track) {
             WebProtocolCodec.TrackPayload payload = payload(snapshot, timeline, speed,
                     liveMode);
-            lastTrackJson = WebProtocolCodec.track(nowWall, payload);
-            fanOut(lastTrackJson);
-            lastPushSummary = "track " + snapshot.title;
+            WebProtocolCodec.TrackStream stream = WebProtocolCodec.trackStream(nowWall, payload);
+            fanOutAll(stream.frames);
+            lastPushSummary = "track " + snapshot.title + (stream.chunkCount > 0
+                    ? " [" + stream.chunkCount + " chunks, " + stream.byteCount + "B]"
+                    : " [" + stream.byteCount + "B]");
         }
         if (decision.state) {
             lastStateJson = WebProtocolCodec.state(nowWall, snapshot.active, snapshot.playing,
@@ -194,6 +198,11 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
     private void fanOut(String json) {
         CloudSyncClient cloudLeg = cloud;
         if (cloudLeg != null) cloudLeg.send(json);
+    }
+
+    /** Head first, then its chunks: the relay forwards each socket write in order. */
+    private void fanOutAll(List<String> frames) {
+        for (String frame : frames) fanOut(frame);
     }
 
     private WebProtocolCodec.TrackPayload payload(MusicSnapshot snapshot, LrcTimeline timeline,
@@ -219,7 +228,7 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
         return payload;
     }
 
-    @Override public String trackJson() {
+    @Override public List<String> trackFrames() {
         if (watcherOwnsWeSing()) return null;
         MusicSnapshot snapshot =
                 MusicStateStore.snapshot(AppPreferences.lyricOffsetMs(context));
@@ -227,15 +236,15 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
         String pausedSong = AppPreferences.pausedSongKey(context);
         if (!pausedSong.isEmpty() && pausedSong.equals(songKey(snapshot.title, snapshot.artist,
                 MusicStateStore.activeSourceId()))) {
-            return WebProtocolCodec.blank(System.currentTimeMillis(), "output-paused");
+            return Collections.singletonList(
+                    WebProtocolCodec.blank(System.currentTimeMillis(), "output-paused"));
         }
         // Always freshly built: the snapshot must reflect "now", never a cached frame (a
         // stale position anchor makes a joining display jump).
         WebProtocolCodec.TrackPayload payload = payload(snapshot,
                 MusicStateStore.currentTimeline(), MusicStateStore.playbackSpeed(),
                 snapshot.liveLyricActive);
-        lastTrackJson = WebProtocolCodec.track(System.currentTimeMillis(), payload);
-        return lastTrackJson;
+        return WebProtocolCodec.trackStream(System.currentTimeMillis(), payload).frames;
     }
 
     @Override public String stateJson() {

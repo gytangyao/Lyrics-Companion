@@ -13,6 +13,7 @@ import org.java_websocket.handshake.ServerHandshake;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -43,7 +44,11 @@ final class CloudSyncClient {
 
     /** Fresh frames for a display that just joined the room. */
     interface SnapshotSource {
-        String trackJson();
+        /**
+         * The track push, in order: a head frame plus the {@code lyric_chunk} frames that fill
+         * it when the timeline is too big for one frame. Null = another source owns the song.
+         */
+        List<String> trackFrames();
 
         String stateJson();
     }
@@ -182,6 +187,12 @@ final class CloudSyncClient {
                     if (stopped) return;
                     AppLog.w(TAG, "closed code=" + code + " remote=" + remote
                             + " reason=" + reason + "; retry in " + RECONNECT_MS + "ms");
+                    if (code == 1009) {
+                        // The relay's inbound text buffer overflowed: a frame we sent was too
+                        // big. Survives in the file log because logcat here rolls in seconds.
+                        DiagnosticLog.record(context, "WebSync",
+                                "cloud closed a frame for being too big (1009): " + reason);
+                    }
                     handler.postDelayed(CloudSyncClient.this::syncConnection, RECONNECT_MS);
                 }
 
@@ -296,8 +307,10 @@ final class CloudSyncClient {
                 lastSnapshotPushElapsed = now;
                 // Null = another source (the PC watcher) owns the current song; the
                 // watcher answers joining displays with its own snapshot.
-                String track = hooks.trackJson();
-                if (track != null) send(track);
+                List<String> track = hooks.trackFrames();
+                if (track != null) {
+                    for (String frame : track) send(frame);
+                }
                 String state = hooks.stateJson();
                 if (state != null) send(state);
             }

@@ -273,6 +273,8 @@
     var artVersionSeen = -1;
     var lineIndexShown = -2;   // forces first paint
     var textShown = null;
+    var stream = null;         // timeline arriving in lyric_chunk frames: {id,total,got,parts,deadline}
+    var installedStreamId = '';
 
     function serverNow() {
         return Date.now() - clockOffset;
@@ -406,6 +408,7 @@
         if (!frame || !frame.type) return;
         if (frame.type === 'welcome') { /* capabilities unused by this page in v1 */ }
         else if (frame.type === 'track') onTrackData(frame.data, frame.ts);
+        else if (frame.type === 'lyric_chunk') onLyricChunk(frame.data);
         else if (frame.type === 'state') onStateData(frame.data, frame.ts);
         else if (frame.type === 'line') onLineData(frame.data);
         else if (frame.type === 'pong') onPong(frame);
@@ -416,6 +419,8 @@
     /* 识别有误时 App 下发的清屏指令：清空一切，不显示任何歌词与占位。 */
     function onBlankData() {
         lines = [];
+        stream = null;
+        installedStreamId = '';
         liveMode = false;
         liveText = '';
         anchor.ts = 0;
@@ -440,13 +445,22 @@
         anchor.speed = data.speed || 1;
         anchor.ts = ts || Date.now();
         liveMode = false;
-        lines = [];
         var lyric = data.lyric;
         if (lyric && lyric.live) {
+            lines = [];
+            stream = null;
+            installedStreamId = '';
             liveMode = true;
             liveText = lyric.currentText || '';
-        } else if (lyric && lyric.lines) {
-            lines = lyric.lines;
+        } else if (lyric && lyric.stream) {
+            // A word-level timeline is too big for one frame (the relay kills frames over
+            // ~8KB with a 1009 close), so the lines follow in lyric_chunk frames. Keep the
+            // previous timeline on screen until the set is complete rather than blanking it.
+            beginStream(lyric.stream);
+        } else {
+            lines = (lyric && lyric.lines) ? lyric.lines : [];
+            stream = null;
+            installedStreamId = '';
         }
         document.getElementById('title').innerHTML = escapeHtml(data.title || '');
         var artist = data.artist || '';
@@ -463,6 +477,62 @@
         lineIndexShown = -2;
         textShown = null;
         updateMetaLayout();
+    }
+
+    /* ---------------- chunked timeline (lyric_chunk) ---------------- */
+
+    function beginStream(meta) {
+        var id = String(meta.id || '');
+        var total = Number(meta.total || 0);
+        if (!id || total <= 0) {
+            // A head we cannot follow: drop the old timeline rather than sing it for a new song.
+            lines = [];
+            stream = null;
+            installedStreamId = '';
+            return;
+        }
+        if (id === installedStreamId) return;
+        if (stream && stream.id === id) return;
+        stream = { id: id, total: total, got: 0, parts: {}, deadline: Date.now() + 5000 };
+    }
+
+    function onLyricChunk(data) {
+        if (!data || !data.id) return;
+        var id = String(data.id);
+        if (id === installedStreamId) return;
+        if (!stream || stream.id !== id) {
+            // Chunks of a stream we never saw the head for (joined mid-session); the app's
+            // snapshot on our next heartbeat replaces them.
+            stream = { id: id, total: Number(data.total || 0), got: 0, parts: {},
+                    deadline: Date.now() + 5000 };
+        }
+        var seq = Number(data.seq || 0);
+        if (seq <= 0 || seq > stream.total || stream.parts[seq]) return;
+        stream.parts[seq] = data.lines || [];
+        stream.got++;
+        if (stream.got >= stream.total) installStream();
+    }
+
+    function installStream() {
+        var merged = [];
+        for (var i = 1; i <= stream.total; i++) {
+            merged = merged.concat(stream.parts[i] || []);
+        }
+        installedStreamId = stream.id;
+        stream = null;
+        lines = merged;
+        lineIndexShown = -2;
+        textShown = null;
+    }
+
+    /** A stream that stalls (lost chunks) must not leave the surface on another song's lines. */
+    function expireStream() {
+        if (stream && Date.now() > stream.deadline) {
+            lines = [];
+            stream = null;
+            installedStreamId = '';
+            lineIndexShown = -2;
+        }
     }
 
     function onStateData(data, ts) {
@@ -671,6 +741,7 @@
     }
 
     function frame() {
+        expireStream();
         if (liveMode) renderLiveText();
         else renderTimeline();
         rafId = window.requestAnimationFrame

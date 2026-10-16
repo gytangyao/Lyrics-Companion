@@ -18,11 +18,11 @@
 2. **自研显示端**：连 `wss://socket.wemew.com/websocket/bluetooth_box/{barId}`，每 2 秒
    发房间心跳
    `{"type":"online","sender":"control_box","data":{"deviceId":"<你的设备ID>","timestamp":<ms>}}`，
-   然后处理收到的协议 v1 帧（`track`/`state`/`line`/`pong`），按 §6 插值。忽略自己发出
-   帧的回显与 `online` 心跳；进房后 App 会主动推 `track`+`state` 快照。
+   然后处理收到的协议 v1 帧（`track`/`lyric_chunk`/`state`/`line`/`pong`），按 §6 插值。忽略自己
+   发出帧的回显与 `online` 心跳；进房后 App 会主动推 `track`+`state` 快照。
 
-> 云端大帧：`track` 帧携带全量时间轴（典型 4–10KB）已实测经云中继正常收发；
-> 超大曲目建议显示端容忍分帧到达。
+> **单帧上限 6000 字节**：云中继把整条入站文本消息缓冲完才转发，超限直接以 `1009` 关连接。
+> 40 行逐字 QRC 时间轴序列化后有 10–12KB，因此超大时间轴按 §4.1.1 分帧下发。
 
 
 ## 1. 兼容性规则（双方必须遵守）
@@ -58,7 +58,7 @@
 {"v":1,"type":"welcome","ts":1760000000000,"data":{
   "protocol":1,
   "server":{"name":"wemew-lrc-sync","version":"<App 版本号>"},
-  "capabilities":["track","state","line","cover","ping"]
+  "capabilities":["track","state","line","cover","ping","lyric_chunk"]
 }}
 ```
 
@@ -111,6 +111,37 @@
 | `lines[].t / d` | 行起始毫秒 / 行时长毫秒（绝对时间） |
 | `lines[].words` | 逐字时间轴，可缺省（＝行级歌词）；`words[].t/d` 同为绝对毫秒 |
 | `hasArt` / `artVersion` | 封面扩展位；当前恒为 `false`/`0`（云传输暂不携带封面） |
+
+#### 4.1.1 分帧：`lyric.stream` + `lyric_chunk`
+
+全量时间轴超过单帧上限时，`track` 帧**不再内联** `lines`，改为声明一条流，行数据随后由
+`lyric_chunk` 帧补齐：
+
+```json
+{"v":1,"type":"track","ts":1760000000000,"data":{"title":"稻香","positionMs":41200,
+  "lyric":{"live":false,"sourceName":"WeSing QRC 逐字",
+           "stream":{"id":"3f2a1c9b7d4e5a01","total":3,"lines":43}}}}
+
+{"v":1,"type":"lyric_chunk","ts":1760000000000,"data":{
+  "id":"3f2a1c9b7d4e5a01","seq":1,"total":3,
+  "lines":[{"t":40100,"d":5200,"text":"……","words":[{"t":40100,"d":410,"text":"……"}]}]}}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `stream.id` | 该行数据内容的 FNV-1a 64 位散列（16 位十六进制）。**同一份时间轴永远是同一个 id** |
+| `stream.total` | 后续 `lyric_chunk` 帧数 |
+| `stream.lines` | 总行数，用于校验收齐 |
+| `lyric_chunk.seq` | 1 起连续编号，按序拼接即原始 `lines` 顺序 |
+
+显示端规则：
+
+- `stream.id` 与已装配完成的那条相同 → 直接丢弃后续分帧（重连快照、重复下发都走这里，画面不动）
+- 装配期间**保留旧时间轴**，不要清屏；`seq` 齐了才整体替换
+- 5 秒内没收齐 → 丢弃这条流（宁可显示间奏，也不要拿上一首歌的行唱这首歌）；
+  显示端每 2 秒的 `online` 心跳会让手机端重新下发一份完整快照，自愈
+- 不认识 `lyric_chunk` 的旧显示端会忽略分帧、只见标题不见歌词，但**不会断线**——这正是分帧取代
+  大帧的意义
 
 ### 4.2 `state` — 轻量进度锚点
 
