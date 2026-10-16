@@ -43,6 +43,14 @@ public final class WebSyncService extends Service {
             if (current != null && current.tickAgeMs() > WATCHDOG_STALL_MS) {
                 recoverFromStall();
             }
+            // READ_LOGS can be granted over adb while the app runs; retry the WeSing
+            // watcher while its mode is active. start() is a no-op unless the grant is
+            // in place.
+            try {
+                if ("wesing".equals(AppPreferences.musicSourceMode(WebSyncService.this))) {
+                    WeSingLogcatWatcher.get(WebSyncService.this).start();
+                }
+            } catch (Throwable ignored) { }
             watchdogHandler.postDelayed(this, WATCHDOG_INTERVAL_MS);
         }
     };
@@ -109,6 +117,9 @@ public final class WebSyncService extends Service {
         if (cloudSync != null) cloudSync.stop();
         if (bindingClient != null) bindingClient.stop();
         if (publisher != null) publisher.stop();
+        try {
+            WeSingLogcatWatcher.get(this).stop();
+        } catch (Throwable ignored) { }
         AppLog.i("WebSync", "service stopped");
         DiagnosticLog.record(this, "WebSync", "cloud sync service stopped");
         super.onDestroy();

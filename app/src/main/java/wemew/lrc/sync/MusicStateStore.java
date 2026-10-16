@@ -14,7 +14,8 @@ import java.util.concurrent.Future;
 final class MusicStateStore {
     private static final String TAG = "LyricsMusicState";
     private static final Object LOCK = new Object();
-    private static final ExecutorService LYRIC_EXECUTOR = Executors.newCachedThreadPool();
+    // Shared with WeSingLogcatWatcher's cloud-lyric fetches.
+    static final ExecutorService LYRIC_EXECUTOR = Executors.newCachedThreadPool();
     private static final ExecutorService ART_EXECUTOR = Executors.newSingleThreadExecutor();
     /** One arbitration line per channel change; the debounce inside the arbiter bounds the rest. */
     private static final long SOURCE_LOG_INTERVAL_MS = 2_000L;
@@ -352,6 +353,11 @@ final class MusicStateStore {
     static void clear() {
         boolean hadState;
         synchronized (LOCK) {
+            // WeSing's recording page publishes no MediaSession at all, so the session reader
+            // reports "no usable session" continuously while the watcher keeps writing the
+            // mirrored timeline. An empty read is not evidence that WeSing stopped, and clearing
+            // here blanked the panel between two watcher writes.
+            if ("wesing".equals(source)) return;
             hadState = active || !TextUtils.isEmpty(title);
             active = false;
             playing = false;

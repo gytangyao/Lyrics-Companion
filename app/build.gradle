@@ -46,6 +46,10 @@ android {
 
     testOptions {
         unitTests.returnDefaultValues = true
+        // Mirror check: ./gradlew test -PqrcDir=<directory the adb mirror loop fills>
+        unitTests.all {
+            it.systemProperty 'qrc.dir', project.findProperty('qrcDir') ?: ''
+        }
     }
 }
 

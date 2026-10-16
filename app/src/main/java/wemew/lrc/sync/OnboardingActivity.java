@@ -226,11 +226,10 @@ public final class OnboardingActivity extends AppCompatActivity {
             refreshChecklist();
         });
 
-        addSourceCard("全民K歌", "wesing",
-                new String[]{"com.tencent.karaoke"});
+        addSourceCard("全民K歌", "wesing", new int[]{R.drawable.ic_wesing});
         addSourceCard("媒体播放器", "media",
-                new String[]{"com.tencent.qqmusic", "com.netease.cloudmusic",
-                        "com.kugou.android", "com.luna.music"});
+                new int[]{R.drawable.ic_qqmusic, R.drawable.ic_netease,
+                        R.drawable.ic_kugou, R.drawable.ic_soda});
 
         LinearLayout bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.VERTICAL);
@@ -240,8 +239,8 @@ public final class OnboardingActivity extends AppCompatActivity {
         return page;
     }
 
-    /** A source card: real app icons (from PackageManager) plus one short label. */
-    private void addSourceCard(String label, String value, String[] iconPackages) {
+    /** A source card: bundled official app icons plus one short label. */
+    private void addSourceCard(String label, String value, int[] iconResIds) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
@@ -261,18 +260,18 @@ public final class OnboardingActivity extends AppCompatActivity {
             nextButton.setAlpha(1f);
         });
 
-        LinearLayout icons = new LinearLayout(this);
-        icons.setOrientation(LinearLayout.HORIZONTAL);
-        icons.setGravity(Gravity.CENTER_VERTICAL);
-        int size = iconPackages.length == 1 ? dp(56) : dp(40);
-        for (int i = 0; i < iconPackages.length; i++) {
-            View icon = iconView(iconPackages[i], size);
+        LinearLayout iconRow = new LinearLayout(this);
+        iconRow.setOrientation(LinearLayout.HORIZONTAL);
+        iconRow.setGravity(Gravity.CENTER_VERTICAL);
+        int size = iconResIds.length == 1 ? dp(56) : dp(40);
+        for (int i = 0; i < iconResIds.length; i++) {
+            View badge = iconView(iconResIds[i], size);
             LinearLayout.LayoutParams iconParams =
                     new LinearLayout.LayoutParams(size, size);
             if (i > 0) iconParams.leftMargin = dp(6);
-            icons.addView(icon, iconParams);
+            iconRow.addView(badge, iconParams);
         }
-        card.addView(icons, new LinearLayout.LayoutParams(-2, -2));
+        card.addView(iconRow, new LinearLayout.LayoutParams(-2, -2));
         TextView heading = text(label, 18, 0xFFF3F7FC, true);
         heading.setPadding(dp(16), 0, 0, 0);
         card.addView(heading, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -287,28 +286,21 @@ public final class OnboardingActivity extends AppCompatActivity {
         }
     }
 
-    /** The app's launcher icon, or a styled letter block when it is not installed. */
-    private View iconView(String packageName, int sizePx) {
-        try {
-            android.graphics.drawable.Drawable icon =
-                    getPackageManager().getApplicationIcon(packageName);
-            android.widget.ImageView view = new android.widget.ImageView(this);
-            view.setImageDrawable(icon);
-            view.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
-            return view;
-        } catch (Throwable ignored) {
-            TextView fallback = text("♪", 18, 0xFFF3F7FC, true);
-            fallback.setGravity(Gravity.CENTER);
-            fallback.setBackground(makeFallbackIconBackground());
-            return fallback;
+    /** Bundled official app icon clipped to a rounded square (artwork corners vary by brand). */
+    private View iconView(int iconResId, int sizePx) {
+        android.widget.ImageView view = new android.widget.ImageView(this);
+        view.setImageResource(iconResId);
+        view.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        if (Build.VERSION.SDK_INT >= 21) {
+            view.setClipToOutline(true);
+            view.setOutlineProvider(new android.view.ViewOutlineProvider() {
+                @Override public void getOutline(android.view.View view,
+                        android.graphics.Outline outline) {
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(10));
+                }
+            });
         }
-    }
-
-    private MaterialShapeDrawable makeFallbackIconBackground() {
-        MaterialShapeDrawable surface = new MaterialShapeDrawable();
-        surface.setFillColor(ColorStateList.valueOf(0xFF2A2C44));
-        surface.setCornerSize(dp(12));
-        return surface;
+        return view;
     }
 
     private int indexForMode(String value) {
@@ -374,12 +366,18 @@ public final class OnboardingActivity extends AppCompatActivity {
         if ("media".equals(mode)) {
             addCheckRow("音乐读取权限（通知使用权）", hasNotificationAccess(),
                     "必选 · 识别正在播放的歌曲", v -> openNotificationAccess());
+        } else if (!WeSingLogcatWatcher.supportedOnThisDevice()) {
+            // logcat -T timestamp filtering (Android 5.0) is the only platform floor;
+            // in practice WeSing itself needs a far newer OS, so this arm is theoretical.
+            addCheckRow("系统版本（Android "
+                            + Build.VERSION.RELEASE + "）", false,
+                    "全民K歌模式需要 Android 5.0 及以上（本机不支持），请返回上一页改选媒体播放器",
+                    v -> {
+                        screen2.setVisibility(View.GONE);
+                        screen1.setVisibility(View.VISIBLE);
+                    });
         } else {
-            TextView watcher = text("电脑端启动方式：手机连电脑，在仓库目录运行\n"
-                    + "node wesing_watcher.js --bar 门店号", 12, 0xFFADABF2, false);
-            watcher.setLineSpacing(0f, 1.25f);
-            watcher.setPadding(dp(4), dp(8), dp(4), dp(4));
-            permissionList.addView(watcher, wrap());
+            addLogPermissionRow();
         }
 
         addCheckRow("后台不受限（电池白名单）", isIgnoringBatteryOptimizations(),
@@ -409,10 +407,62 @@ public final class OnboardingActivity extends AppCompatActivity {
 
     private boolean requiredDone() {
         if (!isIgnoringBatteryOptimizations()) return false;
-        if (!"media".equals(mode)) return true;
-        if (!hasNotificationAccess()) return false;
-        if (Build.VERSION.SDK_INT >= 33 && !postNotificationsGranted()) return false;
-        return !needsVendorAutostart() || autostartConfirmed;
+        if ("media".equals(mode)) {
+            if (!hasNotificationAccess()) return false;
+            if (Build.VERSION.SDK_INT >= 33 && !postNotificationsGranted()) return false;
+            return !needsVendorAutostart() || autostartConfirmed;
+        }
+        // WeSing mode: the adb-granted READ_LOGS permission is the whole high-privilege
+        // story, and it survives reboots.
+        return WeSingLogcatWatcher.supportedOnThisDevice() && WeSingLogcatWatcher.granted(this);
+    }
+
+    // ---- WeSing mode: READ_LOGS authorization ---------------------------------------
+
+    /**
+     * The one-time PC authorization: READ_LOGS is signature|development, so there is no
+     * runtime dialog — the installer runs the adb grant once and it persists across
+     * reboots. No Shizuku to install, pair, or resurrect after a power cycle.
+     * The QRC mirror rides along in the same session: Android 12+ refuses the app every
+     * route into WeSing's Android/data directory (File API, 所有文件访问, SAF alike), while
+     * the adb shell belongs to ext_data_rw and can copy those files into our own directory.
+     */
+    private void addLogPermissionRow() {
+        boolean granted = WeSingLogcatWatcher.granted(this);
+        addCheckRow("日志读取授权（READ_LOGS）", granted,
+                granted ? "必选 · 已就绪，重启后依然有效"
+                        : "必选 · 装机时用电脑执行一次授权命令，永久有效",
+                v -> showGrantHelp());
+    }
+
+    /** Walks the installer through the one-shot adb grant; re-checks on demand. */
+    private void showGrantHelp() {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("一次性授权（需电脑）")
+                .setMessage("1. 平板开启「USB 调试」，用数据线连接电脑\n\n"
+                        + "2. 日志读取授权（重启后依然有效）：\n"
+                        + WeSingLogcatWatcher.GRANT_COMMAND + "\n\n"
+                        + "3. 原唱歌词同步（重启后需重新执行）：\n"
+                        + WeSingLogcatWatcher.QRC_MIRROR_COMMAND + "\n\n"
+                        + "第 3 步把全民K歌已下载的歌词同步到我们自己的目录——Android 12+"
+                        + " 起，本机应用无法直接读取其他应用的 Android/data 目录，只有电脑端"
+                        + " adb 有这个权限。同步缺失时会自动改用云端歌词，逐字进度可能有"
+                        + " 1 秒左右的偏差。\n\n"
+                        + "4. 回到本页点「重新检测」。")
+                .setPositiveButton("重新检测", (dialog, which) -> refreshChecklist())
+                .setNeutralButton("复制日志命令", (dialog, which) ->
+                        copyText(WeSingLogcatWatcher.GRANT_COMMAND))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void copyText(String value) {
+        android.content.ClipboardManager clipboard =
+                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard != null) {
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("命令", value));
+        }
+        SafeToast.show(this, "命令已复制", Toast.LENGTH_SHORT);
     }
 
     private boolean postNotificationsGranted() {

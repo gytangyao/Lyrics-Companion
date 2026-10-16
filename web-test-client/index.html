@@ -507,14 +507,18 @@
     }
 
     function findLineIndex(position) {
-        var best = -1;
         for (var i = 0; i < lines.length; i++) {
             var line = lines[i];
             if (position >= line.t && position < line.t + Math.max(1, line.d)) return i;
-            if (position >= line.t) best = i;
+            if (position < line.t) {
+                // The line before this one has already been sung. WeSing scrolls to the next
+                // line the moment the current one ends, so holding the finished line through the
+                // gap is what reads as "大屏慢了一句" — up to a whole interlude behind.
+                // The intro is the exception: there the screen shows 间奏, not the first line.
+                return i === 0 ? -1 : i;
+            }
         }
-        // Past the last line's start but inside none: hold the last line a moment.
-        return best;
+        return lines.length ? lines.length - 1 : -1;
     }
 
     /* 逐词模式：words 拼起来与整行文本一致时，每个词独立按自己的时间轴点亮，

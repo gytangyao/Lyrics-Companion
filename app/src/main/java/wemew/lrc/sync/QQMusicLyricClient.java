@@ -5,10 +5,14 @@ import android.content.Context;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 final class QQMusicLyricClient {
     private static final String REFERER = "https://y.qq.com/";
     private static final String QRC_URL =
             "https://c.y.qq.com/qqmusic/fcgi-bin/lyric_download.fcg";
+    private static final Pattern TI_TAG = Pattern.compile("\\[ti:([^\\]]*)]");
     private final LyricCache cache;
 
     QQMusicLyricClient(Context context) { cache = new LyricCache(context, "qq"); }
@@ -78,6 +82,101 @@ final class QQMusicLyricClient {
         }
         return LrcTimeline.parse(original == null ? "" : original,
                 translated == null ? "" : translated, enhanced == null ? "" : enhanced);
+    }
+
+    /**
+     * WeSing leg: the recording log already identifies the song, so try the direct
+     * musicid download first (WeSing shares QQ's catalogue, its numeric songId is
+     * expected to be a QQ musicid) and only fall back to the keyword-search path
+     * {@link #load} when the ids do not resolve. Cache is keyed by songMid/songId.
+     */
+    LrcTimeline loadForWeSing(String songId, String songMid, String title, String artist,
+            long durationMs) {
+        String key = songMid == null || songMid.trim().isEmpty() ? songId : songMid.trim();
+        String original = cache.read(key + "_original");
+        String translated = cache.read(key + "_translated");
+        String enhanced = cache.read(key + "_qrc");
+        if (original != null && cacheDisqualified(original, title)) {
+            // Written by the interim build's unvalidated songmid rung, an entry under
+            // this key can be another song's lyric (observed on a pad build). Drop the
+            // whole write — otherwise its non-null original short-circuits every fetch
+            // rung below and the wrong lyric gets served forever.
+            original = null;
+            translated = null;
+        }
+        if (original != null && translated != null && enhanced != null) {
+            return LrcTimeline.parse(original, translated, enhanced);
+        }
+        if (songId != null && songId.matches("\\d+")) {
+            // Numeric ids (phone build's enterRecordData) address the QQ download
+            // endpoint directly — WeSing and QQ share that catalogue.
+            try {
+                String response = LyricHttp.request("POST", QRC_URL, REFERER,
+                        "version=15&miniversion=100&lrctype=4&musicid=" + songId);
+                if (enhanced == null) {
+                    enhanced = QrcLyricCodec.decryptToTimedLyric(
+                            QrcLyricCodec.encryptedContent(response, "content"));
+                    if (!enhanced.isEmpty()) cache.write(key + "_qrc", enhanced);
+                }
+                if (translated == null) {
+                    translated = QrcLyricCodec.decryptToLrc(
+                            QrcLyricCodec.encryptedContent(response, "contentts"));
+                    if (!translated.isEmpty()) cache.write(key + "_translated", translated);
+                }
+            } catch (Throwable ignored) { }
+        }
+        if (enhanced == null && title != null && !title.trim().isEmpty()) {
+            // SongInfo from the recording room is the trustworthy identity on pad builds;
+            // the keyword search is self-validating (matchScore floor of 100).
+            try {
+                LrcTimeline searched = load(title, artist, durationMs);
+                if (searched != null && searched.lineCount() > 0) return searched;
+            } catch (Throwable ignored) { }
+        }
+        if (original == null && songMid != null && !songMid.trim().isEmpty()) {
+            // Pad builds expose a songMid that may live in WeSing's own id space: fed to
+            // QQ it can return another song's lyric (observed). Only trust the result
+            // when the returned LRC names the song being recorded.
+            try {
+                JSONObject lyric = new JSONObject(LyricHttp.get(
+                        "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid="
+                                + LyricHttp.encode(songMid.trim()) + "&format=json&nobase64=1",
+                        REFERER));
+                String candidate = decodeEntities(lyric.optString("lyric", ""));
+                if (lyricNamesSong(candidate, title)) {
+                    original = candidate;
+                    if (!original.isEmpty()) cache.write(key + "_original", original);
+                    if (translated == null || translated.isEmpty()) {
+                        translated = decodeEntities(lyric.optString("trans", ""));
+                        if (!translated.isEmpty()) cache.write(key + "_translated", translated);
+                    }
+                }
+            } catch (Throwable ignored) { }
+        }
+        return LrcTimeline.parse(original == null ? "" : original,
+                translated == null ? "" : translated, enhanced == null ? "" : enhanced);
+    }
+
+    /** Cross-checks an LRC's [ti:] tag against the song being recorded. */
+    private static boolean lyricNamesSong(String lrc, String title) {
+        if (lrc == null || lrc.isEmpty()) return false;
+        if (title == null || title.trim().isEmpty()) return false; // nothing to check against
+        Matcher ti = TI_TAG.matcher(lrc);
+        return ti.find() && namesMatch(ti.group(1), title);        // unverifiable → reject
+    }
+
+    /** A cached entry is poisoned when its [ti:] provably names a different song. */
+    private static boolean cacheDisqualified(String original, String title) {
+        if (original == null || title == null || title.trim().isEmpty()) return false;
+        Matcher ti = TI_TAG.matcher(original);
+        if (!ti.find()) return false;               // no [ti:] → cannot judge → keep
+        return !namesMatch(ti.group(1), title);
+    }
+
+    private static boolean namesMatch(String got, String want) {
+        String a = got.trim();
+        String b = want.trim();
+        return a.contains(b) || b.contains(a);
     }
 
     private static String decodeEntities(String value) {
