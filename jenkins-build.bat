@@ -34,11 +34,49 @@ if defined missing (
     goto ERROR_EOF
 )
 
+if not exist "!APP_SIGNING_STORE_FILE!" (
+    echo [ERROR] keystore not found on this machine: !APP_SIGNING_STORE_FILE!
+    echo         The File credential only stores a path. Copy the keystore to this
+    echo         build node, or replace the credential with an uploaded file.
+    goto ERROR_EOF
+)
+
 set "APP_VERSION_NAME=%appVersion%"
 set "APP_VERSION_CODE=%appVersionCode%"
 
+:: ===================== JDK preflight =====================
+:: Gradle 8.9 / AGP 8.7.3 cannot run on a JDK newer than 22. A node with JDK 25 dies inside
+:: the first build script with "Unsupported class file major version 69", which reads like a
+:: Gradle bug, so stop here and name the JDK instead. RELEASE_JDK_HOME points this build at an
+:: installed JDK without changing the machine-wide JAVA_HOME.
+if defined RELEASE_JDK_HOME set "JAVA_HOME=!RELEASE_JDK_HOME!"
+set "javaExe=java"
+if defined JAVA_HOME if exist "!JAVA_HOME!\bin\java.exe" set "javaExe=!JAVA_HOME!\bin\java.exe"
+set "javaVersion="
+for /f "tokens=3" %%a in ('"!javaExe!" -version 2^>^&1 ^| findstr /i version') do if not defined javaVersion set "javaVersion=%%a"
+if not defined javaVersion (
+    echo [ERROR] "!javaExe!" did not report a java version.
+    echo         Install JDK 17 or 21 on this node and point JAVA_HOME or RELEASE_JDK_HOME at it.
+    goto ERROR_EOF
+)
+set javaVersion=!javaVersion:"=!
+set "javaMajor="
+for /f "tokens=1,2 delims=." %%x in ("!javaVersion!") do (
+    if "%%x" equ "1" (set "javaMajor=%%y") else (set "javaMajor=%%x")
+)
+if not defined javaMajor set "javaMajor=0"
+if !javaMajor! LSS 17 set "jdkProblem=too old, need 17 or 21"
+if !javaMajor! GTR 23 set "jdkProblem=too new, this Gradle is only proven up to 23"
+if not "!jdkProblem!" equ "" (
+    echo [ERROR] java !javaVersion! from !javaExe! is !jdkProblem!
+    echo         Install JDK 17 or 21 on this node and set RELEASE_JDK_HOME to its folder,
+    echo         e.g. RELEASE_JDK_HOME=D:\Soft\jdk-21
+    goto ERROR_EOF
+)
+
 echo ================================================================
 echo  Build    : %appVersion%  (versionCode %appVersionCode%)
+echo  JDK      : !javaVersion!  (!javaExe!)
 echo  SDK      : %ANDROID_HOME%
 echo  Workspace: %projectDir%
 echo  Archive  : %ARCHIVE_DIR%
