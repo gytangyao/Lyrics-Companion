@@ -3,6 +3,7 @@
 local.properties
 build/
 app/build/
+Releases/
 *.iml
 *.apk
 secret.md
