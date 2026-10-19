@@ -18,7 +18,25 @@ if "%projectDir:~-1%" equ "\" set "projectDir=%projectDir:~0,-1%"
 set "apkOutDir=%projectDir%\app\build\outputs\apk\release"
 set "releasesDir=%projectDir%\Releases"
 if not defined ARCHIVE_DIR set "ARCHIVE_DIR=D:\builds\WemewLrcSync"
-if not defined ANDROID_HOME set "ANDROID_HOME=D:\Soft\android-sdk"
+
+:: ===================== Android SDK =====================
+:: Gradle answers "SDK location not found" when ANDROID_HOME points at a directory this node does
+:: not have, which reads like a broken SDK install. Take ANDROID_HOME when it really holds
+:: build-tools, otherwise look in the places the SDK usually lands, and stop before Gradle when
+:: none of them does.
+set "sdkPicked="
+rem A trailing backslash inside the quotes ("D:\sdk\") reads as an escaped quote, which swallows the
+rem label argument and dies with "cannot find batch label". Strip it before every call.
+if defined ANDROID_HOME if "!ANDROID_HOME:~-1!" equ "\" set "ANDROID_HOME=!ANDROID_HOME:~0,-1!"
+if defined ANDROID_HOME call :use_sdk "%ANDROID_HOME%"
+if not defined sdkPicked for %%d in ("D:\Soft\android-sdk" "%LOCALAPPDATA%\Android\Sdk" "C:\Android\Sdk" "C:\Android\android-sdk" "C:\Program Files (x86)\Android\android-sdk") do call :use_sdk "%%~d"
+if defined sdkPicked set "ANDROID_HOME=!sdkPicked!"
+if not defined sdkPicked (
+    echo [ERROR] no Android SDK with build-tools found on this node.
+    echo         Checked ANDROID_HOME and the usual install directories.
+    echo         Install the SDK, or set ANDROID_HOME to it in the Jenkins job.
+    goto ERROR_EOF
+)
 
 :: ===================== signing keys (Jenkins credentials binding) =====================
 :: Bind the keystore file to APP_SIGNING_STORE_FILE and the other three to secret text.
@@ -51,6 +69,7 @@ set "APP_VERSION_CODE=%appVersionCode%"
 :: to trigger it. So prefer RELEASE_JDK_HOME, then any installed JDK this Gradle can run on.
 set "jdkPicked="
 set "jdkPickedMajor=0"
+if defined RELEASE_JDK_HOME if "!RELEASE_JDK_HOME:~-1!" equ "\" set "RELEASE_JDK_HOME=!RELEASE_JDK_HOME:~0,-1!"
 if defined RELEASE_JDK_HOME call :use_jdk "%RELEASE_JDK_HOME%"
 if not defined jdkPicked for /d %%d in ("C:\Program Files\Eclipse Adoptium\jdk-*") do call :use_jdk "%%d"
 if not defined jdkPicked for /d %%d in ("C:\Program Files\Java\jdk-*") do call :use_jdk "%%d"
@@ -174,10 +193,12 @@ endlocal
 exit /b 1
 
 :: Accept %~1 as a JDK home only when its java reports a Gradle-runnable version, and keep the
-:: newest accepted one so a node with both 17 and 21 builds on 21.
+:: newest accepted one so a node with both 17 and 21 builds on 21. The raw existence test comes
+:: first: "for %%f in (path\.)" on a missing directory prints "path not found" into the build log,
+:: which reads like a broken scan even though the routine then correctly skips it.
 :use_jdk
+if not exist "%~1\bin\java.exe" exit /b 0
 for %%f in ("%~1\.") do set "jdkRoot=%%~ff"
-if not exist "!jdkRoot!\bin\java.exe" exit /b 0
 set "probeVersion="
 for /f "tokens=3" %%a in ('"!jdkRoot!\bin\java.exe" -version 2^>^&1 ^| findstr /i version') do if not defined probeVersion set "probeVersion=%%a"
 if not defined probeVersion exit /b 0
@@ -193,4 +214,11 @@ if !probeMajor! GTR !jdkPickedMajor! (
     set "jdkPicked=!jdkRoot!"
     set "jdkPickedMajor=!probeMajor!"
 )
+exit /b 0
+
+:: %~1 counts as an SDK only when it holds build-tools, which is what apksigner is taken from.
+:use_sdk
+if not exist "%~1\build-tools" exit /b 0
+for %%f in ("%~1\.") do set "sdkRoot=%%~ff"
+set "sdkPicked=!sdkRoot!"
 exit /b 0
