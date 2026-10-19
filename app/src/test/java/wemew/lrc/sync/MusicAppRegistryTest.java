@@ -135,6 +135,32 @@ public class MusicAppRegistryTest {
         assertTrue(plan.manualSelection);
     }
 
+    @Test public void ownCatalogOnlyKeepsJustThePlayerCatalog() {
+        MultiSourceLyricClient.CatalogPlan plan = MultiSourceLyricClient.catalogPlan(
+                "netease", "auto", true, false, true);
+        assertEquals(Arrays.asList("netease"), plan.providers);
+        assertEquals(Arrays.asList("netease"), plan.priority);
+        assertFalse(plan.manualSelection);
+    }
+
+    @Test public void ownCatalogOnlyKeepsManualCatalogWithoutOthers() {
+        MultiSourceLyricClient.CatalogPlan plan = MultiSourceLyricClient.catalogPlan(
+                "qqmusic", "kugou", true, false, true);
+        assertEquals(Arrays.asList("kugou"), plan.providers);
+        assertTrue(plan.manualSelection);
+    }
+
+    @Test public void ownCatalogOnlyLeavesForeignPlayersOnTheFullChain() {
+        MultiSourceLyricClient.CatalogPlan plan = MultiSourceLyricClient.catalogPlan(
+                "ximalaya", "auto", true, false, true);
+        assertEquals(Arrays.asList("netease", "qqmusic", "kugou", "kuwo", "soda"),
+                plan.providers);
+        MultiSourceLyricClient.CatalogPlan off = MultiSourceLyricClient.catalogPlan(
+                "netease", "auto", true, false, false);
+        assertEquals(5, off.providers.size());
+        assertEquals("netease", off.providers.get(0));
+    }
+
     @Test public void automaticCatalogStillUsesRecognizedPlayerFirst() {
         MultiSourceLyricClient.CatalogPlan plan = MultiSourceLyricClient.catalogPlan(
                 "kuwo", "auto", false);

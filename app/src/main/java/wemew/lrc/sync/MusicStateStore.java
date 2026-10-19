@@ -112,6 +112,7 @@ final class MusicStateStore {
         boolean forcedPlayerCatalog = AppPreferences.hasForcedPlayerPackageCatalog(context,
                 normalizedSourcePackage);
         boolean playerCatalogFallback = AppPreferences.playerCatalogFallback(context);
+        boolean ownCatalogOnly = AppPreferences.ownCatalogOnly(context);
         long generationToLoad = -1L;
         long generationForAlbumArt = -1L;
         boolean trackChangedForLog = false;
@@ -340,7 +341,7 @@ final class MusicStateStore {
             scheduleLyricLoad(generationToLoad, normalizedSource, normalizedSourcePackage,
                     newMediaId, newMediaUri,
                     newTitle, newArtist, newDuration, selectedCatalog, playerCatalogFallback,
-                    forcedPlayerCatalog);
+                    forcedPlayerCatalog, ownCatalogOnly);
             if (newAlbumArt == null && TextUtils.isEmpty(newAlbumArtUri)) {
                 scheduleCatalogAlbumArtLoad(generationToLoad, newTitle, newArtist, newDuration);
             }
@@ -572,6 +573,7 @@ final class MusicStateStore {
         long requestedDuration;
         String selectedCatalog;
         boolean playerCatalogFallback = AppPreferences.playerCatalogFallback(context);
+        boolean ownCatalogOnly = AppPreferences.ownCatalogOnly(context);
         boolean forcedPlayerCatalog;
         synchronized (LOCK) {
             if (TextUtils.isEmpty(title)) return;
@@ -611,7 +613,7 @@ final class MusicStateStore {
         scheduleLyricLoad(generation, requestedSource, requestedSourcePackage,
                 requestedMediaId, requestedMediaUri, requestedTitle,
                 requestedArtist, requestedDuration, selectedCatalog, playerCatalogFallback,
-                forcedPlayerCatalog);
+                forcedPlayerCatalog, ownCatalogOnly);
     }
 
     static String describe(Context context) {
@@ -668,7 +670,7 @@ final class MusicStateStore {
                                           String requestedTitle, String requestedArtist,
                                           long requestedDuration, String selectedCatalog,
                                           boolean playerCatalogFallback,
-                                          boolean forcedPlayerCatalog) {
+                                          boolean forcedPlayerCatalog, boolean ownCatalogOnly) {
         synchronized (LOCK) {
             if (generation != trackGeneration) return;
             final boolean bypassMatchedCache = !sessionTimelineAllowed;
@@ -685,7 +687,7 @@ final class MusicStateStore {
                                     return generation == trackGeneration && usingSessionTimeline
                                             ? timeline : LrcTimeline.EMPTY;
                                 }
-                            }, bypassMatchedCache);
+                            }, bypassMatchedCache, ownCatalogOnly);
                     synchronized (LOCK) {
                         if (generation != trackGeneration || usingSessionTimeline
                                 && !"local".equals(result.providerId)) {

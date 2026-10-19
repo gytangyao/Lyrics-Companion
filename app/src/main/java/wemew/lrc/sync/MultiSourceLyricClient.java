@@ -52,6 +52,15 @@ final class MultiSourceLyricClient {
                 boolean forceSelectedCatalog, String sourcePackage, String mediaId, String mediaUri,
                 String title, String artist, long durationMs, SessionTimeline sessionTimeline,
                 boolean bypassMatchedCache) throws Exception {
+        return load(currentSource, selectedCatalog, playerCatalogFallback, forceSelectedCatalog,
+                sourcePackage, mediaId, mediaUri, title, artist, durationMs, sessionTimeline,
+                bypassMatchedCache, false);
+    }
+
+    Result load(String currentSource, String selectedCatalog, boolean playerCatalogFallback,
+                boolean forceSelectedCatalog, String sourcePackage, String mediaId, String mediaUri,
+                String title, String artist, long durationMs, SessionTimeline sessionTimeline,
+                boolean bypassMatchedCache, boolean ownCatalogOnly) throws Exception {
         if (AppPreferences.localLyricEnabled(appContext)) {
             LocalLyricClient.Hit localHit = local.load(mediaUri, title, artist);
             if (!localHit.timeline.isEmpty()) {
@@ -64,10 +73,10 @@ final class MultiSourceLyricClient {
             }
         }
         CatalogPlan plan = catalogPlan(currentSource, selectedCatalog, playerCatalogFallback,
-                forceSelectedCatalog);
+                forceSelectedCatalog, ownCatalogOnly);
         DiagnosticLog.record(appContext, "Lyrics", "lookup start source=" + currentSource
                 + " selected=" + selectedCatalog + " playerFallback=" + playerCatalogFallback
-                + " forced=" + forceSelectedCatalog
+                + " forced=" + forceSelectedCatalog + " ownOnly=" + ownCatalogOnly
                 + " package=" + sourcePackage
                 + " providers=" + plan.providers + " title=" + title + " artist=" + artist
                 + " durationMs=" + durationMs + " directMediaId="
@@ -243,6 +252,13 @@ final class MultiSourceLyricClient {
 
     static CatalogPlan catalogPlan(String currentSource, String selectedCatalog,
                                    boolean playerCatalogFallback, boolean forceSelectedCatalog) {
+        return catalogPlan(currentSource, selectedCatalog, playerCatalogFallback,
+                forceSelectedCatalog, false);
+    }
+
+    static CatalogPlan catalogPlan(String currentSource, String selectedCatalog,
+                                   boolean playerCatalogFallback, boolean forceSelectedCatalog,
+                                   boolean ownCatalogOnly) {
         List<String> providers = new ArrayList<>(Arrays.asList(
                 "netease", "qqmusic", "kugou", "kuwo", "soda"));
         List<String> ordered = new ArrayList<>();
@@ -253,6 +269,14 @@ final class MultiSourceLyricClient {
             priority.add(selected);
             ordered.add(selected);
             return new CatalogPlan(ordered, priority, true);
+        }
+        // 开关打开：播放器有自家词库（或用户为它指定了词库）时只查这一个，未命中不再轮询其他家。
+        if (ownCatalogOnly) {
+            String only = !selected.isEmpty() ? selected : player;
+            if (!only.isEmpty()) {
+                List<String> single = new ArrayList<>(Arrays.asList(only));
+                return new CatalogPlan(single, new ArrayList<>(single), !selected.isEmpty());
+            }
         }
         if (selected.isEmpty()) {
             if (!player.isEmpty()) {

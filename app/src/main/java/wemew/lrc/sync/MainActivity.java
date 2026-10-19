@@ -22,6 +22,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.shape.MaterialShapeDrawable;
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
@@ -147,6 +148,26 @@ public final class MainActivity extends AppCompatActivity {
         // ---- 操作 ----
         LinearLayout actionCard = card();
         actionCard.addView(sectionLabel("操作"));
+        MaterialSwitch ownCatalogSwitch = new MaterialSwitch(this);
+        ownCatalogSwitch.setText("只匹配播放器自家词库");
+        ownCatalogSwitch.setTextSize(15);
+        ownCatalogSwitch.setTextColor(0xFFF3F7FC);
+        ownCatalogSwitch.setChecked(AppPreferences.ownCatalogOnly(this));
+        LinearLayout.LayoutParams ownSwitchParams = new LinearLayout.LayoutParams(-1, -2);
+        ownSwitchParams.topMargin = dp(6);
+        actionCard.addView(ownCatalogSwitch, ownSwitchParams);
+        TextView ownSwitchHint = text("开启后：播放器有自家词库时只查它，未命中不再尝试其他词库；"
+                + "关闭则按词库回退链匹配", 12, 0xFF7A7FA5, false);
+        LinearLayout.LayoutParams ownHintParams = new LinearLayout.LayoutParams(-1, -2);
+        ownHintParams.topMargin = dp(2);
+        actionCard.addView(ownSwitchHint, ownHintParams);
+        ownCatalogSwitch.setOnCheckedChangeListener((buttonView, checked) -> {
+            AppPreferences.setOwnCatalogOnly(this, checked);
+            MusicStateStore.reloadLyrics(this);
+            SafeToast.show(this, checked
+                    ? "已改为只匹配自家词库，正在重新匹配" : "已恢复词库回退链匹配，正在重新匹配",
+                    Toast.LENGTH_SHORT);
+        });
         outputToggle = button("停止大屏歌词（仅本曲）", true);
         outputToggle.setOnClickListener(v -> {
             String pausedSong = AppPreferences.pausedSongKey(this);

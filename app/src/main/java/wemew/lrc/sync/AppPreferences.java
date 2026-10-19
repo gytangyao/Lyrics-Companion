@@ -19,6 +19,7 @@ final class AppPreferences {
     /** Exact package names that have published a playable MediaSession on this device. */
     static final String KEY_OBSERVED_PLAYER_PACKAGES = "observed_player_packages";
     static final String KEY_PLAYER_CATALOG_FALLBACK = "player_catalog_fallback";
+    static final String KEY_OWN_CATALOG_ONLY = "own_catalog_only";
     /** 忽略这些应用发布的媒体元数据（issue #35）。 */
     static final String KEY_IGNORED_PLAYER_PACKAGES = "ignored_player_packages";
     /** 匹配到的歌词长时间不滚动时，改用播放器实时歌词（issue #44）。 */
@@ -144,6 +145,15 @@ final class AppPreferences {
 
     static void setPlayerCatalogFallback(Context context, boolean enabled) {
         get(context).edit().putBoolean(KEY_PLAYER_CATALOG_FALLBACK, enabled).apply();
+    }
+
+    /** 播放器有自家词库时只查自家词库，未命中不再轮询其他词库；关闭走原有回退链。 */
+    static boolean ownCatalogOnly(Context context) {
+        return get(context).getBoolean(KEY_OWN_CATALOG_ONLY, false);
+    }
+
+    static void setOwnCatalogOnly(Context context, boolean enabled) {
+        get(context).edit().putBoolean(KEY_OWN_CATALOG_ONLY, enabled).apply();
     }
 
     /**
