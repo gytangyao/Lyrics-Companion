@@ -5,16 +5,21 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.SystemClock;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -22,8 +27,8 @@ import java.util.regex.Pattern;
  * On-device WeSing watcher: the PC-side wesing_watcher.js logic running fully in-app.
  * A one-time {@code adb shell pm grant wemew.lrc.sync android.permission.READ_LOGS}
  * (signature|development permission — no runtime dialog, persisted across reboots) lets
- * the app uid poll incremental {@code logcat} batches itself, so the watcher survives
- * power cycles with no Shizuku daemon to resurrect. Word-level lyrics come from WeSing's
+ * the app uid read {@code logcat} itself, so the watcher survives power cycles with no
+ * Shizuku daemon to resurrect. Word-level lyrics come from WeSing's
  * own QRC, mirrored into our files/qrc directory by {@link #QRC_MIRROR_COMMAND} (its
  * timing already matches the accompaniment WeSing plays); the QQ cloud catalogue via
  * {@link QQMusicLyricClient#loadForWeSing} is the fallback for songs never opened there.
@@ -35,14 +40,24 @@ final class WeSingLogcatWatcher {
     /** The whole on-site SOP: run once per install from a PC, survives reboots. */
     static final String GRANT_COMMAND =
             "adb shell pm grant wemew.lrc.sync android.permission.READ_LOGS";
-    private static final long POLL_INTERVAL_MS = 1_000L;
-    /** Hard cap on one batch. The watermark only advances over returned lines, so a flood
-     *  defers its overflow to the next poll instead of losing it. */
-    private static final int MAX_BATCH_BYTES = 128 * 1024;
-    /** Cloud fetch attempts per song before the timeline stays empty for this session. */
-    private static final int MAX_TIMELINE_ATTEMPTS = 3;
+    /** Backoff between logcat stream restarts; a stream that delivered lines resets it. */
+    private static final long STREAM_RETRY_MIN_MS = 250L;
+    private static final long STREAM_RETRY_MAX_MS = 5_000L;
+    /** The reader re-measures the wall/elapsed clock offset this often, so an NTP step cannot
+     *  leave every later event time skewed for the rest of the session. */
+    private static final long CLOCK_REFRESH_MS = 5_000L;
+    /**
+     * Timeline attempts per song, spread over these delays. WeSing writes its own QRC into
+     * {@code files/qrc} up to a second after the recording page announces the song
+     * (measured: page enter 11:12:45.590, qrc on disk 11:12:46.454), and the mirror loop that
+     * copies it where we can read it runs every 3s — so a first-attempt miss is the normal case
+     * for any song nobody has opened before, not an error.
+     */
+    private static final long[] TIMELINE_RETRY_DELAY_MS = {0L, 4_000L, 10_000L};
     /** Bounded like the old in-memory qrc cache: song entries are a few KB each. */
     private static final int TIMELINE_CACHE_LIMIT = 60;
+    /** Bounded identity memory: a few dozen song titles. */
+    private static final int IDENTITY_CACHE_LIMIT = 40;
     /** WeSing's accompaniment-synced QRC files, mirrored into our own external files
      *  directory by {@link #QRC_MIRROR_COMMAND}. Reading them in place is impossible on
      *  Android 12+ — the framework blocks cross-app {@code Android/data} for every in-app
@@ -81,6 +96,17 @@ final class WeSingLogcatWatcher {
             "RecordEnterParam\\(songMid='([^']+)', songName=([^,]+),");
     private static final Pattern RE_START_RECORD = Pattern.compile(
             "startRecord,recordServiceData=.*?recordDelay=(\\d+)");
+    /**
+     * Two more proofs that a recording is running, because {@code startRecord} arrives once per
+     * take, in the middle of a page-load burst. Neither can fire for the room's background singer
+     * or for the recording page's own chorus preview: those never touch the microphone and never
+     * resume the sing transport.
+     */
+    private static final Pattern RE_MIC_RECORDING = Pattern.compile(
+            "SimpleKaraRecorder\\.SimpleRecordThread.*AudioRecord\\.startRecording, "
+                    + "before startCost");
+    private static final Pattern RE_RESUME_SING = Pattern.compile(
+            "KaraRecordService.*\\[UI\\]resume sing");
     /** WeSing's own playback clock, logged at every finished sentence and at recording start
      *  ({@code timeStamp:0.0}). This is the position the accompaniment is really at. */
     private static final Pattern RE_SCORER_POSITION = Pattern.compile(
@@ -108,7 +134,7 @@ final class WeSingLogcatWatcher {
     private static final Pattern RE_SING_PAUSE_ALT2 = Pattern.compile(
             "StreamPlayerV2.*\\brun -> pause play");
     private static final Pattern RE_SING_STOP = Pattern.compile(
-            "KaraRecordService:.*\\bstop sing");
+            "KaraRecordService.*\\bstop sing");
     /** The recording page's own track length, in ms, on the line that hands it the accompaniment. */
     private static final Pattern RE_DURATION = Pattern.compile("iDuration=(\\d+)");
     /** How far a sample may disagree with our own clock before it is treated as another song's. */
@@ -134,7 +160,7 @@ final class WeSingLogcatWatcher {
             "try on(Play|Pause|Start): \\$?SongInfo\\(songName=([^,]+), singerName=([^,]+), "
                     + "album=, duration=(\\d+)");
     private static final Pattern RE_SCORE = Pattern.compile(
-            "RecordScoreModule: \\[UI\\]songId = (\\S+?), totalScore =(\\d+)");
+            "RecordScoreModule.*\\[UI\\]songId = (\\S+?), totalScore =(\\d+)");
     private static final Pattern RE_LOG_TIME = Pattern.compile(
             "^(\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3})");
 
@@ -144,15 +170,27 @@ final class WeSingLogcatWatcher {
     /** Watched by the publisher thread while the watcher thread writes — concurrent for a
      *  reason the old HashMap only got away with by luck. */
     private final Map<String, LrcTimeline> timelineCache = new ConcurrentHashMap<>();
+    /** Ids whose cached timeline came from WeSing's own QRC — the timing that matches the
+     *  accompaniment, so nothing may replace it. */
+    private final Set<String> mirroredTimelineIds = ConcurrentHashMap.newKeySet();
+    /** Ids with a fetch already dispatched, so a retry cannot pile onto the first attempt. */
+    private final Set<String> timelineInFlight = ConcurrentHashMap.newKeySet();
+    /** songId → {title, artist}. Some identity lines carry only an id; without this the last
+     *  line of a fast switch leaves the screen title-less and therefore blank. */
+    private final Map<String, String[]> identityCache = new ConcurrentHashMap<>();
     private volatile QQMusicLyricClient lyricClient;
     private Thread thread;
     private volatile boolean stopped;
-    /** logcat -T watermark: everything strictly before this timestamp is already parsed. */
-    private String lastLogTimestamp;
-    /** wall-clock minus elapsed-realtime at the last poll (anchor conversion). */
+    /** The streaming logcat child; {@link #stop} destroys it because a blocked pipe read is
+     *  not interruptible. */
+    private volatile Process logcatChild;
+    /** Lazily created, single daemon thread, at most a couple of pending timeline retries. */
+    private volatile ScheduledExecutorService retryExecutor;
+    /** wall-clock minus elapsed-realtime, re-measured every {@link #CLOCK_REFRESH_MS}. */
     private volatile long wallMinusElapsedMs;
-    /** One-shot flag: log the first non-empty poll so silence always has an explanation. */
-    private boolean pollDiagnosticsLogged;
+    private volatile long clockRefreshedElapsedMs;
+    /** One-shot flag: log the first delivered line so silence always has an explanation. */
+    private boolean streamDiagnosticsLogged;
     /** Latched while logcat keeps reporting errors, so a broken grant cannot spam the log. */
     private boolean logcatErrorLatched;
 
@@ -191,8 +229,14 @@ final class WeSingLogcatWatcher {
      * walks the lyrics before 开始演唱 is ever pressed.
      */
     private volatile boolean takeLive;
-    /** Watcher-thread-only counter behind {@link #MAX_TIMELINE_ATTEMPTS}. */
-    private int timelineAttempts;
+    /**
+     * True from the moment the take ends ({@code stop sing} or the final score) until another song
+     * is entered or a new take opens. Publishes as {@code STATE_STOPPED}, which is what lets the
+     * big screen clear instead of freezing on the last line the singer reached — the result page
+     * keeps WeSing's player logging positions for its own preview, so "not playing" alone cannot
+     * tell a finished song from a paused one.
+     */
+    private volatile boolean takeEnded;
 
     private WeSingLogcatWatcher(Context context) {
         this.context = context.getApplicationContext();
@@ -220,16 +264,16 @@ final class WeSingLogcatWatcher {
         }
     }
 
-    /** logcat -T timestamp filtering (API 21) is the only platform floor left. */
+    /** The reader only needs to spawn {@code logcat} and read its stdout; API 21 is the floor. */
     static boolean supportedOnThisDevice() {
         return Build.VERSION.SDK_INT >= 21;
     }
 
     synchronized void start() {
-        if (!granted(context) || thread != null) return;
+        Thread current = thread;
+        if (!granted(context) || (current != null && current.isAlive())) return;
         stopped = false;
-        wallMinusElapsedMs = System.currentTimeMillis() - SystemClock.elapsedRealtime();
-        lastLogTimestamp = logcatTimestampNow();
+        refreshClockOffset();
         thread = new Thread(this::runLoop, "WeSingLogcatWatcher");
         thread.start();
         AppLog.i(TAG, "on-device watcher started");
@@ -239,6 +283,13 @@ final class WeSingLogcatWatcher {
         stopped = true;
         Thread current = thread;
         thread = null;
+        // A read blocked on the logcat pipe ignores interrupt(); killing the child is what
+        // actually unblocks it. Without this the thread outlives stop() and a later start()
+        // would leave two logcat children feeding one parser.
+        Process child = logcatChild;
+        if (child != null) child.destroy();
+        ScheduledExecutorService retries = retryExecutor;
+        if (retries != null) retries.shutdownNow();
         if (current != null) current.interrupt();
         active = false;
         AppLog.i(TAG, "on-device watcher stopped");
@@ -249,73 +300,86 @@ final class WeSingLogcatWatcher {
         return current != null && current.isAlive();
     }
 
-    private void runLoop() {
-        while (!stopped) {
-            try {
-                // Wall/elapsed offset from the same clock the log timestamps live on.
-                wallMinusElapsedMs = System.currentTimeMillis() - SystemClock.elapsedRealtime();
-                String batch = pollLogcat();
-                if (batch != null) consume(batch);
-            } catch (InterruptedException wake) {
-                Thread.currentThread().interrupt();
-            } catch (Throwable error) {
-                AppLog.w(TAG, "poll failed: " + error);
-                sleepQuietly(2_000L);
-                continue;
-            }
-            sleepQuietly(POLL_INTERVAL_MS);
-        }
-    }
-
-    /** Parses one incremental batch; skips and notes logcat's own error lines. */
-    private void consume(String batch) {
-        boolean sawLogcatError = false;
-        if (!pollDiagnosticsLogged && !batch.trim().isEmpty()) {
-            pollDiagnosticsLogged = true;
-            AppLog.i(TAG, "first poll ok: " + batch.split("\n").length
-                    + " lines from -T " + lastLogTimestamp);
-        }
-        for (String line : batch.split("\n")) {
-            if (line.startsWith("logcat:")) {
-                sawLogcatError = true;
-                continue;
-            }
-            if (isWatcherLine(line)) onLine(line);
-            advanceWatermark(line);
-        }
-        if (sawLogcatError && !logcatErrorLatched) {
-            logcatErrorLatched = true;
-            AppLog.w(TAG, "logcat reported an error (READ_LOGS grant missing?); "
-                    + "suppressing further notes until a clean batch");
-        } else if (!sawLogcatError) {
-            logcatErrorLatched = false;
-        }
-    }
-
     /**
-     * One incremental logcat dump in the app's own uid. {@code -d} makes the child exit
-     * after the dump; redirectErrorStream merges a missing-grant complaint into the batch
-     * where {@link #consume} can surface it.
+     * Streams logcat for the lifetime of one child process and restarts it with a short backoff
+     * whenever the stream ends. Streaming rather than a {@code logcat -d -T <watermark>} poll once
+     * a second is what keeps burst seconds intact: opening a recording page produced 465 KB in a
+     * single second on this tablet while the main and system ring buffers hold 256 KB each, so a
+     * poll-based reader loses exactly the lines that say the take is live — the big screen then
+     * sat on the first line for a whole song because one {@code startRecord} was evicted.
      */
-    private String pollLogcat() throws Exception {
-        Process process = new ProcessBuilder("logcat", "-d", "-v", "time",
-                "-T", lastLogTimestamp).redirectErrorStream(true).start();
-        try {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            InputStream input = process.getInputStream();
-            byte[] buffer = new byte[8192];
-            int count;
-            while (out.size() < MAX_BATCH_BYTES && (count = input.read(buffer)) > 0) {
-                out.write(buffer, 0, count);
+    private void runLoop() {
+        long backoffMs = STREAM_RETRY_MIN_MS;
+        while (!stopped) {
+            long lines = -1L;
+            String failure = null;
+            try {
+                lines = streamLogcat();
+            } catch (Throwable error) {
+                failure = String.valueOf(error);
             }
-            if (out.size() >= MAX_BATCH_BYTES) {
-                // Drain the rest so the child exits instead of blocking on a full pipe.
-                while (input.read(buffer) > 0) { /* discard */ }
+            if (stopped) break;
+            backoffMs = lines > 0L ? STREAM_RETRY_MIN_MS
+                    : Math.min(backoffMs * 2, STREAM_RETRY_MAX_MS);
+            AppLog.w(TAG, "logcat stream closed"
+                    + (lines >= 0L ? " after " + lines + " lines" : "")
+                    + (failure == null ? "" : ": " + failure)
+                    + "; restarting in " + backoffMs + "ms");
+            sleepQuietly(backoffMs);
+        }
+        synchronized (this) {
+            // Let the watchdog's start() resurrect a reader that died on its own.
+            if (thread == Thread.currentThread()) thread = null;
+        }
+    }
+
+    /** One continuous logcat child, read line by line; nothing is buffered beyond a line. */
+    private long streamLogcat() throws Exception {
+        Process process = new ProcessBuilder("logcat", "-v", "time")
+                .redirectErrorStream(true).start();
+        logcatChild = process;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                process.getInputStream(), StandardCharsets.UTF_8), 16 * 1024)) {
+            long lines = 0L;
+            String line;
+            while (!stopped && (line = reader.readLine()) != null) {
+                lines++;
+                if (!streamDiagnosticsLogged) {
+                    streamDiagnosticsLogged = true;
+                    AppLog.i(TAG, "logcat stream connected");
+                }
+                if (line.startsWith("logcat:")) {
+                    noteLogcatError();
+                    continue;
+                }
+                logcatErrorLatched = false;
+                // Filter before touching the clock: a page-load burst is thousands of lines a
+                // second and only a few of them are ours.
+                if (isWatcherLine(line)) {
+                    refreshClockOffset();
+                    onLine(line);
+                }
             }
-            return out.toString("UTF-8");
+            return lines;
         } finally {
+            logcatChild = null;
             process.destroy();
         }
+    }
+
+    /** Wall/elapsed offset for anchor conversion, re-measured at most every few seconds. */
+    private void refreshClockOffset() {
+        long elapsed = SystemClock.elapsedRealtime();
+        if (elapsed - clockRefreshedElapsedMs < CLOCK_REFRESH_MS) return;
+        clockRefreshedElapsedMs = elapsed;
+        wallMinusElapsedMs = System.currentTimeMillis() - elapsed;
+    }
+
+    private void noteLogcatError() {
+        if (logcatErrorLatched) return;
+        logcatErrorLatched = true;
+        AppLog.w(TAG, "logcat reported an error (READ_LOGS grant missing?); "
+                + "suppressing further notes until a clean line");
     }
 
     private static void sleepQuietly(long ms) {
@@ -324,13 +388,6 @@ final class WeSingLogcatWatcher {
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         }
-    }
-
-    /** Watermark start: look back 5 minutes so a song entered just before the watcher
-     *  came up (right after onboarding, say) still gets its enter event. */
-    private static String logcatTimestampNow() {
-        return new SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
-                .format(new Date(System.currentTimeMillis() - 5 * 60_000L));
     }
 
     /** Parses a logcat wall timestamp ("MM-dd HH:mm:ss.SSS") into epoch milliseconds. */
@@ -344,17 +401,7 @@ final class WeSingLogcatWatcher {
         }
     }
 
-    /** Keeps the -T watermark at the newest timestamp seen so far. */
-    private void advanceWatermark(String line) {
-        Matcher m = RE_LOG_TIME.matcher(line);
-        if (!m.find()) return;
-        String stamp = m.group(1);
-        if (lastLogTimestamp == null || stamp.compareTo(lastLogTimestamp) > 0) {
-            lastLogTimestamp = stamp;
-        }
-    }
-
-    /** Event wall time → elapsed-realtime using the poll's measured clock offset. */
+    /** Event wall time → elapsed-realtime using the reader's measured clock offset. */
     private long eventElapsedMs(String line) {
         Matcher m = RE_LOG_TIME.matcher(line);
         if (!m.find()) return SystemClock.elapsedRealtime();
@@ -372,10 +419,32 @@ final class WeSingLogcatWatcher {
                 || line.indexOf("StreamPlayerV2") >= 0
                 || line.indexOf("KaraM4aPlayer") >= 0
                 || line.indexOf("KaraRecordService") >= 0
+                || line.indexOf("SimpleKaraRecorder") >= 0
                 || line.indexOf("AccompanySingController") >= 0
                 || line.indexOf("BluetoothMusicManager") >= 0
                 || line.indexOf("RecordDataSourceModule") >= 0
                 || line.indexOf("RECORD_LOG_V8") >= 0;
+    }
+
+    /** The lifecycle rules, in the order {@link #onLine} applies them. */
+    private static final Pattern[] LIFECYCLE_RULES = {
+            RE_ENTER, RE_DEAL_QRC, RE_ENTER_PARAM, RE_V8_SONGMID, RE_META,
+            RE_SING_PAUSE, RE_SING_PAUSE_ALT1, RE_SING_PAUSE_ALT2, RE_SING_STOP,
+            RE_MIC_RECORDING, RE_RESUME_SING, RE_PLAYER_POSITION, RE_PLAYER_START,
+            RE_START_RECORD, RE_SCORER_POSITION, RE_BT_PLAY, RE_SCORE,
+    };
+
+    /**
+     * Test seam: would a real logcat line reach a lifecycle rule at all? Every tag in
+     * {@code logcat -v time} output carries its {@code (pid)} before the colon, so a rule written
+     * as {@code "Tag:"} matches nothing and fails silently — which is how pause, stop and the
+     * final score all stayed dead on this tablet while the log said otherwise.
+     */
+    static boolean matchesLifecycleRule(String line) {
+        for (Pattern rule : LIFECYCLE_RULES) {
+            if (rule.matcher(line).find()) return true;
+        }
+        return false;
     }
 
     // ---- event handling (watcher thread) ------------------------------------------
@@ -397,6 +466,7 @@ final class WeSingLogcatWatcher {
                 active = true;
                 playing = false;
                 AppLog.i(TAG, "enter " + songId + " 「" + title + "」");
+                rememberIdentity(songId, title, artist);
                 // Cache-hit re-entries never log dealQrc; try the cloud fetch directly.
                 loadTimeline(songId);
             }
@@ -408,6 +478,7 @@ final class WeSingLogcatWatcher {
                 songId = m.group(2);
                 active = true;
             }
+            restoreIdentity(songId);
             loadTimeline(songId);
             return;
         }
@@ -419,9 +490,11 @@ final class WeSingLogcatWatcher {
                 active = true;
                 playing = false;
                 AppLog.i(TAG, "enterParam " + songId + " 「" + title + "」");
+                rememberIdentity(songId, title, artist);
                 loadTimeline(songId);
             } else if (title.isEmpty()) {
                 title = m.group(2).trim();
+                rememberIdentity(songId, title, artist);
             }
             return;
         }
@@ -432,6 +505,7 @@ final class WeSingLogcatWatcher {
                 active = true;
                 playing = false;
                 AppLog.i(TAG, "v8 enter " + songId);
+                restoreIdentity(songId);
                 loadTimeline(songId);
             }
             return;
@@ -439,6 +513,7 @@ final class WeSingLogcatWatcher {
         if ((m = RE_META.matcher(line)).find() && m.group(1).equals(songId)) {
             title = m.group(2).trim();
             artist = m.group(3).trim();
+            rememberIdentity(songId, title, artist);
             if (!m.group(1).equals(songMid)) {
                 songMid = m.group(1);
                 // META usually lands after ENTER; the id is richer now, so retry.
@@ -459,14 +534,30 @@ final class WeSingLogcatWatcher {
             return;
         }
         if (RE_SING_STOP.matcher(line).find()) {
+            // WeSing logs "stop sing" and "stop sing end" a few hundred ms apart.
+            if (takeEnded) return;
             if (takeLive) {
                 takeLive = false;
                 pendingPositionMs = -1L;
                 playing = false;
                 posAtPauseMs = Math.max(0L, positionNow());
                 AppLog.i(TAG, "stop sing, take closed at " + posAtPauseMs + "ms");
-                publish();
+            } else if (!active) {
+                // A stop for a song we never saw loaded: nothing on screen to clear.
+                return;
+            } else {
+                AppLog.i(TAG, "stop sing without a live take");
             }
+            takeEnded = true;
+            publish();
+            return;
+        }
+        if (RE_MIC_RECORDING.matcher(line).find()) {
+            openTake("mic recording");
+            return;
+        }
+        if (RE_RESUME_SING.matcher(line).find()) {
+            openTake("resume sing");
             return;
         }
         if ((m = RE_PLAYER_POSITION.matcher(line)).find()) {
@@ -524,6 +615,7 @@ final class WeSingLogcatWatcher {
             pendingPositionMs = 0L;
             pendingPositionEventMs = eventMs;
             takeLive = true;
+            takeEnded = false;
             boolean haveExactAnchor = exactAnchorElapsedMs > 0L
                     && Math.abs(eventMs - exactAnchorEventMs) <= SCORER_TRUST_MS;
             anchorElapsedMs = haveExactAnchor ? exactAnchorElapsedMs : eventMs;
@@ -538,7 +630,10 @@ final class WeSingLogcatWatcher {
             return;
         }
         if ((m = RE_SCORER_POSITION.matcher(line)).find()) {
-            if (!takeLive) return;
+            // The scorer only ever runs while a take is being recorded, so its samples double as
+            // a take-open signal: the last line of defence when startRecord and the mic line were
+            // both lost to a page-load burst.
+            openTake("scorer");
             long implied = (long) Float.parseFloat(m.group(2));
             long eventMs = eventElapsedMs(line);
             if ("true".equals(m.group(1))) {
@@ -584,6 +679,7 @@ final class WeSingLogcatWatcher {
             // confirm that the accompaniment is running.
             title = m.group(2).trim();
             artist = m.group(3).trim();
+            rememberIdentity(songId, title, artist);
             if (durationMs < 0L && !m.group(4).isEmpty()) {
                 durationMs = Long.parseLong(m.group(4)) * 1000L;
             }
@@ -593,10 +689,53 @@ final class WeSingLogcatWatcher {
         }
         if ((m = RE_SCORE.matcher(line)).find() && m.group(1).equals(songId)) {
             playing = false;
+            takeEnded = true;
             AppLog.i(TAG, "finished score=" + m.group(2));
             publish();
             return;
         }
+    }
+
+    /**
+     * Opens the take from any signal that proves a recording is running. Deliberately leaves
+     * {@link #playing} and the anchor alone: the accompaniment's own lines stay the authority for
+     * position, and a live microphone by itself does not mean the music has started moving.
+     */
+    private void openTake(String why) {
+        if (takeLive) return;
+        takeLive = true;
+        takeEnded = false;
+        active = true;
+        AppLog.i(TAG, "take opened by " + why);
+        if (timelineCache.get(songId) == null) loadTimeline(songId);
+        publish();
+    }
+
+    /** Remembers an identity so a later id-only line cannot leave the screen title-less. */
+    private void rememberIdentity(String id, String songTitle, String songArtist) {
+        if (id == null || id.isEmpty() || songTitle == null || songTitle.trim().isEmpty()) return;
+        identityCache.put(id, new String[]{songTitle.trim(),
+                songArtist == null ? "" : songArtist.trim()});
+        while (identityCache.size() > IDENTITY_CACHE_LIMIT) {
+            Iterator<String> any = identityCache.keySet().iterator();
+            if (!any.hasNext()) return;
+            identityCache.remove(any.next());
+        }
+    }
+
+    /**
+     * Fills in a title for an id announced without one. Pad builds announce the recording page
+     * through RECORD_LOG_V8 and {@code dealQrc}, neither of which carries a name, so a fast switch
+     * that ends on such a line used to publish an empty title — which the store refuses to display
+     * and the big screen renders as nothing at all.
+     */
+    private void restoreIdentity(String id) {
+        if (id == null || id.isEmpty() || !title.isEmpty()) return;
+        String[] known = identityCache.get(id);
+        if (known == null) return;
+        title = known[0];
+        if (artist.isEmpty()) artist = known[1];
+        AppLog.i(TAG, "identity restored for " + id + " 「" + title + "」");
     }
 
     private void resetSong(String reason) {
@@ -613,11 +752,11 @@ final class WeSingLogcatWatcher {
         posAtPauseMs = 0L;
         pendingPositionMs = -1L;
         takeLive = false;
+        takeEnded = false;
         // exactAnchor* deliberately survive: on a retake WeSing's player lines arrive in a random
         // order, so dropping the position here is what left startRecord free to re-anchor the song
         // from the microphone countdown. The event-time windows keep a previous song's anchor from
         // being reused.
-        timelineAttempts = 0;
     }
 
     /** Sets the running anchor and records that WeSing itself stated this position. */
@@ -701,38 +840,66 @@ final class WeSingLogcatWatcher {
         }
     }
 
-    /** Kicks the QQ-catalogue fetch; the poll loop never blocks on the network. */
+    /**
+     * Starts (or retries) the timeline fetch for {@code id}: WeSing's own mirrored QRC first, the
+     * QQ cloud catalogue as fallback. Attempts are scheduled rather than counted per call site,
+     * because for a song nobody has opened before WeSing writes its QRC up to a second after the
+     * page announces it and the mirror loop copies it every 3s — a first-attempt miss is the
+     * normal case, not an error. Once the cloud copy is cached the mirrored one must still be able
+     * to replace it, or that song keeps the original singer's timing for the rest of the session.
+     */
     private void loadTimeline(String id) {
-        if (id.isEmpty()) return;
-        LrcTimeline cached = timelineCache.get(id);
-        if (cached != null) {
-            publish();
+        if (id.isEmpty() || mirroredTimelineIds.contains(id)) return;
+        scheduleTimelineAttempt(id, 0);
+    }
+
+    private void scheduleTimelineAttempt(String id, int attempt) {
+        if (id.isEmpty() || mirroredTimelineIds.contains(id)) return;
+        if (attempt >= TIMELINE_RETRY_DELAY_MS.length) {
+            AppLog.w(TAG, "no mirrored QRC for " + id
+                    + (timelineCache.containsKey(id)
+                            ? "; keeping the cloud timeline (original singer's timing)"
+                            : "; no timeline"));
             return;
         }
-        if (timelineAttempts >= MAX_TIMELINE_ATTEMPTS) return;
-        timelineAttempts++;
+        long delay = TIMELINE_RETRY_DELAY_MS[attempt];
+        if (delay <= 0L) {
+            attemptTimeline(id, attempt);
+            return;
+        }
+        retryExecutor().schedule(() -> {
+            if (!stopped) attemptTimeline(id, attempt);
+        }, delay, TimeUnit.MILLISECONDS);
+    }
+
+    private void attemptTimeline(String id, int attempt) {
+        if (!timelineInFlight.add(id)) return;
         // Snapshot volatile metadata; the fetch runs on the shared lyric executor. On pad
         // builds the QQ songMid arrives as songId itself (V8 line), phones carry it in
         // the meta line — the fetch ladder takes whichever is a usable identity.
         final String target = id;
-        final String mid = songMid.isEmpty() ? songId : songMid;
+        final String mid = songMid.isEmpty() ? id : songMid;
         final String songTitle = title;
         final String songArtist = artist;
         final long duration = durationMs;
         MusicStateStore.LYRIC_EXECUTOR.execute(() -> {
-            // WeSing's own QRC is synced to the accompaniment; the QQ cloud catalogue
-            // returns the original singer's timing instead.
-            LrcTimeline timeline = tryLoadMirroredQrc(target);
-            if (timeline != null && !timeline.isEmpty()) {
-                timelineCache.put(target, timeline);
-                if (timelineCache.size() > TIMELINE_CACHE_LIMIT) {
-                    Iterator<String> oldest = timelineCache.keySet().iterator();
-                    if (oldest.hasNext()) oldest.remove();
-                }
-                publish();
-                return;
-            }
             try {
+                // WeSing's own QRC is synced to the accompaniment; the QQ cloud catalogue
+                // returns the original singer's timing instead.
+                LrcTimeline timeline = tryLoadMirroredQrc(target);
+                if (timeline != null && !timeline.isEmpty()) {
+                    boolean replacesCloud = timelineCache.put(target, timeline) != null;
+                    mirroredTimelineIds.add(target);
+                    evictTimelineCache();
+                    if (replacesCloud) {
+                        AppLog.i(TAG, "mirrored QRC replaces cloud timeline for " + target);
+                    }
+                    if (target.equals(songId)) publish();
+                    return;
+                }
+                // A cloud copy is already on screen: keep it and let the next attempt look for
+                // the mirrored file again rather than paying for another network fetch.
+                if (timelineCache.containsKey(target)) return;
                 timeline = lyricClient()
                         .loadForWeSing(target, mid, songTitle, songArtist, duration);
                 if (timeline == null || timeline.lineCount() == 0) {
@@ -740,17 +907,45 @@ final class WeSingLogcatWatcher {
                     return;
                 }
                 timelineCache.put(target, timeline);
-                if (timelineCache.size() > TIMELINE_CACHE_LIMIT) {
-                    Iterator<String> oldest = timelineCache.keySet().iterator();
-                    if (oldest.hasNext()) oldest.remove();
-                }
+                evictTimelineCache();
                 AppLog.i(TAG, "cloud lyric loaded " + target
                         + " lines=" + timeline.lineCount());
-                publish();
+                if (target.equals(songId)) publish();
             } catch (Throwable error) {
                 AppLog.w(TAG, "cloud lyric failed for " + target + ": " + error);
+            } finally {
+                timelineInFlight.remove(target);
+                scheduleTimelineAttempt(target, attempt + 1);
             }
         });
+    }
+
+    /** Drops entries once the cache outgrows its bound; the mirrored flag follows its timeline. */
+    private void evictTimelineCache() {
+        while (timelineCache.size() > TIMELINE_CACHE_LIMIT) {
+            Iterator<String> any = timelineCache.keySet().iterator();
+            if (!any.hasNext()) return;
+            String victim = any.next();
+            timelineCache.remove(victim);
+            mirroredTimelineIds.remove(victim);
+        }
+    }
+
+    private ScheduledExecutorService retryExecutor() {
+        ScheduledExecutorService current = retryExecutor;
+        if (current != null && !current.isShutdown()) return current;
+        synchronized (this) {
+            current = retryExecutor;
+            if (current == null || current.isShutdown()) {
+                current = Executors.newSingleThreadScheduledExecutor(runnable -> {
+                    Thread worker = new Thread(runnable, "WeSingLyricRetry");
+                    worker.setDaemon(true);
+                    return worker;
+                });
+                retryExecutor = current;
+            }
+            return current;
+        }
     }
 
     private QQMusicLyricClient lyricClient() {
@@ -773,8 +968,9 @@ final class WeSingLogcatWatcher {
         MusicPlaybackData data = new MusicPlaybackData(
                 songId, title, artist, null, null, null,
                 durationMs > 0L ? durationMs : -1L,
-                true, playing
-                        ? MusicPlaybackData.STATE_PLAYING : MusicPlaybackData.STATE_PAUSED,
+                true, takeEnded ? MusicPlaybackData.STATE_STOPPED
+                        : playing ? MusicPlaybackData.STATE_PLAYING
+                        : MusicPlaybackData.STATE_PAUSED,
                 positionNow(), SystemClock.elapsedRealtime(), 1f,
                 false, "", timeline == null ? LrcTimeline.EMPTY : timeline);
         MusicStateStore.update(context, "wesing", "全民K歌", "com.tencent.karaoke", data);

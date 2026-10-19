@@ -39,6 +39,8 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
     private volatile CloudSyncClient cloud;
     /** True while the wrong-track guard has already blanked the displays. */
     private boolean blankPushed;
+    /** True while a finished WeSing take has already blanked the displays. */
+    private boolean takeEndedBlanked;
     /** True while the PC watcher's heartbeat makes it the WeSing publisher. */
     private boolean deferringToWatcher;
 
@@ -160,6 +162,25 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
             blankPushed = false;
         }
 
+        // A finished take clears the panel. WeSing's result page keeps playing a preview through
+        // the same player, so "not playing" cannot tell a finished song from a paused one — only
+        // the watcher's explicit stop (published as an inactive session) can.
+        if (!snapshot.active && "wesing".equals(MusicStateStore.activeSourceId())) {
+            if (!takeEndedBlanked) {
+                takeEndedBlanked = true;
+                fanOut(WebProtocolCodec.blank(nowWall, "take-ended"));
+                lastPushSummary = "blank（演唱结束）";
+            }
+            return;
+        }
+        if (takeEndedBlanked) {
+            takeEndedBlanked = false;
+            // A retake of the same song has an unchanged trackKey; force the full track frame so
+            // the display leaves the blank immediately.
+            diff.trackKey = null;
+            diff.lastStatePushElapsedMs = null;
+        }
+
         if (timeline != previousTimeline) {
             timelineEpoch++;
             previousTimeline = timeline;
@@ -238,6 +259,11 @@ final class WebStatePublisher implements CloudSyncClient.SnapshotSource {
                 MusicStateStore.activeSourceId()))) {
             return Collections.singletonList(
                     WebProtocolCodec.blank(System.currentTimeMillis(), "output-paused"));
+        }
+        // A display joining after the take ended gets the blank too, not the last line sung.
+        if (!snapshot.active && "wesing".equals(MusicStateStore.activeSourceId())) {
+            return Collections.singletonList(
+                    WebProtocolCodec.blank(System.currentTimeMillis(), "take-ended"));
         }
         // Always freshly built: the snapshot must reflect "now", never a cached frame (a
         // stale position anchor makes a joining display jump).
