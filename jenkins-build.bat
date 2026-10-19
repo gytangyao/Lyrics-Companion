@@ -45,18 +45,25 @@ set "APP_VERSION_NAME=%appVersion%"
 set "APP_VERSION_CODE=%appVersionCode%"
 
 :: ===================== JDK preflight =====================
-:: Gradle 8.9 / AGP 8.7.3 cannot run on a JDK newer than 22. A node with JDK 25 dies inside
-:: the first build script with "Unsupported class file major version 69", which reads like a
-:: Gradle bug, so stop here and name the JDK instead. RELEASE_JDK_HOME points this build at an
-:: installed JDK without changing the machine-wide JAVA_HOME.
-if defined RELEASE_JDK_HOME set "JAVA_HOME=!RELEASE_JDK_HOME!"
+:: Gradle 8.9 / AGP 8.7.3 cannot run on a JDK newer than 23. A node whose PATH java is 25 dies
+:: inside the first build script with "Unsupported class file major version 69", which reads like
+:: a Gradle bug rather than a missing JDK 17/21, and one forgotten environment variable is enough
+:: to trigger it. So prefer RELEASE_JDK_HOME, then any installed JDK this Gradle can run on.
+set "jdkPicked="
+set "jdkPickedMajor=0"
+if defined RELEASE_JDK_HOME call :use_jdk "%RELEASE_JDK_HOME%"
+if not defined jdkPicked for /d %%d in ("C:\Program Files\Eclipse Adoptium\jdk-*") do call :use_jdk "%%d"
+if not defined jdkPicked for /d %%d in ("C:\Program Files\Java\jdk-*") do call :use_jdk "%%d"
+if not defined jdkPicked call :use_jdk "C:\Program Files\Android\Android Studio\jbr"
+if defined jdkPicked set "JAVA_HOME=!jdkPicked!"
+
 set "javaExe=java"
 if defined JAVA_HOME if exist "!JAVA_HOME!\bin\java.exe" set "javaExe=!JAVA_HOME!\bin\java.exe"
 set "javaVersion="
 for /f "tokens=3" %%a in ('"!javaExe!" -version 2^>^&1 ^| findstr /i version') do if not defined javaVersion set "javaVersion=%%a"
 if not defined javaVersion (
-    echo [ERROR] "!javaExe!" did not report a java version.
-    echo         Install JDK 17 or 21 on this node and point JAVA_HOME or RELEASE_JDK_HOME at it.
+    echo [ERROR] no usable JDK found on this node.
+    echo         Install JDK 17 or 21, or set RELEASE_JDK_HOME to its folder.
     goto ERROR_EOF
 )
 set javaVersion=!javaVersion:"=!
@@ -70,7 +77,7 @@ if !javaMajor! GTR 23 set "jdkProblem=too new, this Gradle is only proven up to 
 if not "!jdkProblem!" equ "" (
     echo [ERROR] java !javaVersion! from !javaExe! is !jdkProblem!
     echo         Install JDK 17 or 21 on this node and set RELEASE_JDK_HOME to its folder,
-    echo         e.g. RELEASE_JDK_HOME=D:\Soft\jdk-21
+    echo         e.g. RELEASE_JDK_HOME=C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot
     goto ERROR_EOF
 )
 
@@ -165,3 +172,25 @@ exit /b 0
 echo [FAILED] build stopped, see the Gradle output above.
 endlocal
 exit /b 1
+
+:: Accept %~1 as a JDK home only when its java reports a Gradle-runnable version, and keep the
+:: newest accepted one so a node with both 17 and 21 builds on 21.
+:use_jdk
+for %%f in ("%~1\.") do set "jdkRoot=%%~ff"
+if not exist "!jdkRoot!\bin\java.exe" exit /b 0
+set "probeVersion="
+for /f "tokens=3" %%a in ('"!jdkRoot!\bin\java.exe" -version 2^>^&1 ^| findstr /i version') do if not defined probeVersion set "probeVersion=%%a"
+if not defined probeVersion exit /b 0
+set probeVersion=!probeVersion:"=!
+set "probeMajor="
+for /f "tokens=1,2 delims=." %%x in ("!probeVersion!") do (
+    if "%%x" equ "1" (set "probeMajor=%%y") else (set "probeMajor=%%x")
+)
+if not defined probeMajor exit /b 0
+if !probeMajor! LSS 17 exit /b 0
+if !probeMajor! GTR 23 exit /b 0
+if !probeMajor! GTR !jdkPickedMajor! (
+    set "jdkPicked=!jdkRoot!"
+    set "jdkPickedMajor=!probeMajor!"
+)
+exit /b 0
